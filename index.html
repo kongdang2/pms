@@ -35977,7 +35977,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.1'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.2'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36559,6 +36559,28 @@ function removeWikiLink(md,title){
   out=out.replace(new RegExp('\\[\\['+esc+'(?:\\|([^\\]]*))?\\]\\]','g'),(m,alias)=>alias||title);
   return out.replace(/\n{3,}/g,'\n\n');
 }
+/* 폭 조절 값은 브라우저에 기억시킨다(계정이 아니라 이 PC 기준) */
+function usePaneSize(key,def){
+  const [v,setV]=React.useState(()=>{const s=parseFloat(localStorage.getItem('pms.pane.'+key));return isFinite(s)?s:def;});
+  React.useEffect(()=>{try{localStorage.setItem('pms.pane.'+key,String(v));}catch(_){}},[key,v]);
+  return [v,setV,()=>setV(def)];
+}
+/* 좌우 폭 조절 손잡이. 드래그하면 onDrag(이동한 px), 더블클릭하면 onReset
+   컴포넌트는 반드시 파일 최상위에 — 안쪽에 정의하면 렌더마다 재마운트되어 드래그가 끊긴다 */
+function Splitter({onDrag,onReset}){
+  const [hot,setHot]=React.useState(false);
+  const down=e=>{e.preventDefault();let last=e.clientX;
+    const mv=ev=>{const dx=ev.clientX-last;last=ev.clientX;if(dx)onDrag(dx);};
+    const up=()=>{window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);
+      document.body.style.cursor='';document.body.style.userSelect='';setHot(false);};
+    window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
+    document.body.style.cursor='col-resize';document.body.style.userSelect='none';setHot(true);};
+  return <div onMouseDown={down} onDoubleClick={onReset} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)}
+    title="드래그해서 폭 조절 · 더블클릭하면 기본 폭"
+    style={{width:5,cursor:'col-resize',position:'relative',flex:'0 0 5px',background:'transparent',alignSelf:'stretch',minHeight:24}}>
+    <div style={{position:'absolute',top:0,bottom:0,left:hot?1:2,width:hot?3:1,background:hot?'var(--color-accent)':'var(--border-default)'}}/>
+  </div>;
+}
 /* 상단 업무/개인 체크박스 */
 function ScopeToggle({scopes,onChange}){
   return <span style={{display:'inline-flex',gap:10,alignItems:'center'}}>
@@ -36571,6 +36593,7 @@ function ScopeToggle({scopes,onChange}){
 function KnowledgeView({db,setDb,st,set,toast}){
   const {Card,Button,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const notes=db.notes;const cur=notes.find(n=>n.id===st.sel)||null;
+  const [lw,setLw,resetLw]=usePaneSize('noteList',250); /* 목록 열 폭 — 아래 early return보다 위에 있어야 훅 순서가 안 바뀐다 */
   const scopes=st.scopes||{work:true,personal:true};const tag=st.tag||'';
   const picked=st.picked||[];
   const upd=(id,patch)=>setDb('notes',notes.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
@@ -36615,7 +36638,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
       toolbarRight={<ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>}>
       <GraphView notes={visible} sel={st.sel} onPick={id=>set({sel:id})} onOpen={id=>set({sel:id,view:'notes'})} onLink={linkNotes} onUnlink={unlinkNotes} onWiki={openByTitle}/>
     </Card>;
-  if(st.view==='search')return <SearchView notes={notes} onPick={id=>set({sel:id,view:'notes'})}/>;
+  if(st.view==='search')return <SearchView notes={notes} onPick={id=>set({sel:id,view:'notes'})} onWiki={openByTitle}/>;
   const mode=st.mode||'split';
   return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
     toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>document.getElementById('mdImport').click()}>.md 가져오기</Button><input id="mdImport" type="file" accept=".md,.txt" multiple style={{display:'none'}} onChange={e=>importMd([...e.target.files])}/>
@@ -36628,12 +36651,13 @@ function KnowledgeView({db,setDb,st,set,toast}){
       <Button variant="gray" size="xs" onClick={bulkTag}># 태그 추가</Button>
       <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
       <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
-    <div style={{display:'grid',gridTemplateColumns:'250px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
+    <div style={{display:'grid',gridTemplateColumns:lw+'px 5px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
       <div style={{borderRight:'1px solid var(--border-default)',overflowY:'auto',maxHeight:'calc(100vh - 262px)'}}>
         <label style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-label)',background:'var(--surface-hover)',cursor:'pointer'}}>
           <input type="checkbox" checked={allOn} onChange={()=>set({picked:allOn?[]:list.map(n=>n.id)})}/>전체 선택</label>
         {list.map(n=><NoteRow key={n.id} n={n} on={n.id===st.sel} picked={picked.includes(n.id)} onPick={()=>toggle(n.id)} onClick={()=>set({sel:n.id})}/>)}
         {!list.length&&<div style={{padding:20,color:'var(--text-label)',textAlign:'center'}}>노트 없음</div>}</div>
+      <Splitter onDrag={dx=>setLw(w=>Math.max(170,Math.min(600,w+dx)))} onReset={resetLw}/>
       {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>노트를 선택하거나 새로 만드세요</div>:<NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{setDb('notes',notes.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/>}
     </div>
   </Card>;
@@ -36661,6 +36685,9 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,titles=[],allTa
   const toggleTask=ln=>{const L=md.split('\n');L[ln]=L[ln].replace(/\[( |x)\]/,(m,c)=>c==='x'?'[ ]':'[x]');setMd(L.join('\n'));};
   const wrap=(a,b)=>{const t=tRef.current;if(!t)return;const s=t.selectionStart,e=t.selectionEnd;const v=md.slice(0,s)+a+md.slice(s,e)+(b??a)+md.slice(e);setMd(v);setTimeout(()=>{t.focus();t.setSelectionRange(s+a.length,e+a.length);});};
   const links=wikiLinks(md);const showEd=mode!=='read',showPv=mode!=='edit';
+  /* 분할 보기에서 편집·읽기 폭 비율(%) */
+  const paneRef=React.useRef();const [ep,setEp,resetEp]=usePaneSize('noteSplit',50);
+  const dragSplit=dx=>{const w=(paneRef.current&&paneRef.current.offsetWidth)||900;setEp(p=>Math.max(20,Math.min(80,p+dx/w*100)));};
   const bare={border:'none',background:'transparent',fontFamily:'var(--font-sans)',color:'var(--text-body)',outline:'none'};
   return <div style={{display:'flex',flexDirection:'column',minWidth:0}}>
     <div style={{display:'flex',gap:8,alignItems:'center',padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-muted)',flexWrap:'wrap'}}>
@@ -36669,8 +36696,8 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,titles=[],allTa
       {showEd&&<span style={{display:'flex',gap:2}}>{[['**','B'],['*','I'],['`','`'],['- [ ] ','☐',''],['## ','H2','']].map(([a,l,b])=><Button key={l} variant="ghost" size="xs" onClick={()=>wrap(a,b)}>{l}</Button>)}<Button variant="ghost" size="xs" title="노트 링크 삽입" onClick={()=>{const t=tRef.current;if(!t)return;const s0=t.selectionStart;const v=md.slice(0,s0)+'[['+md.slice(t.selectionEnd);setMd(v);setTimeout(()=>{t.focus();t.setSelectionRange(s0+2,s0+2);setAc(detect(v,s0+2));});}}>[[ ]]</Button><Button variant="ghost" size="xs" title="마크다운 문법" onClick={()=>setHelp(h=>!h)}>?</Button></span>}
       <Button variant="ghost" size="xs" onClick={onDelete}>🗑</Button>
     </div>
-    <div style={{display:'grid',gridTemplateColumns:showEd&&showPv?'1fr 1fr':'1fr',flex:1,minHeight:0}}>
-      {showEd&&<div style={{position:'relative',display:'flex',flexDirection:'column',minWidth:0}}><textarea ref={tRef} value={md} onChange={onChange} onKeyDown={onKey} onBlur={()=>setTimeout(()=>setAc(null),150)} spellCheck={false} style={{flex:1,border:'none',borderRight:showPv?'1px solid var(--border-default)':'none',outline:'none',resize:'none',padding:'16px 18px',font:'13px/1.7 var(--font-mono)',color:'var(--text-body)',minHeight:'calc(100vh - 340px)',background:'#fff'}}/>
+    <div ref={paneRef} style={{display:'grid',gridTemplateColumns:showEd&&showPv?`minmax(0,${ep}fr) 5px minmax(0,${100-ep}fr)`:'minmax(0,1fr)',flex:1,minHeight:0}}>
+      {showEd&&<div style={{position:'relative',display:'flex',flexDirection:'column',minWidth:0}}><textarea ref={tRef} value={md} onChange={onChange} onKeyDown={onKey} onBlur={()=>setTimeout(()=>setAc(null),150)} spellCheck={false} style={{flex:1,border:'none',outline:'none',resize:'none',padding:'16px 18px',font:'13px/1.7 var(--font-mono)',color:'var(--text-body)',minHeight:'calc(100vh - 340px)',background:'#fff'}}/>
         {ac&&<div style={{position:'absolute',left:18,top:10,zIndex:5,background:'#fff',border:'1px solid var(--border-strong)',boxShadow:'var(--shadow-popover)',borderRadius:6,minWidth:220,maxWidth:360,fontSize:'var(--fs-base)'}}>
           <div style={{padding:'4px 10px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderBottom:'1px solid var(--border-default)'}}>{ac.type==='link'?'🔗 노트 링크':'# 태그'} · ↑↓ 이동 · Enter 선택 · Esc 닫기</div>
           {ac.items.map((it,i)=><div key={it} onMouseDown={e=>{e.preventDefault();accept(it);}} onMouseEnter={()=>setAc({...ac,idx:i})} style={{padding:'5px 10px',cursor:'pointer',background:i===ac.idx?'var(--surface-active)':'transparent',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{ac.type==='link'?'📄 ':'# '}{it}</div>)}
@@ -36681,6 +36708,7 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,titles=[],allTa
           <div style={{marginTop:6,color:'var(--text-label)'}}>편집 중 <code>[[</code> 입력 → 노트 제목 자동완성 · <code>#</code> 입력 → 태그 자동완성 · 본문의 <code>#태그</code>는 자동으로 태그 목록에 추가</div>
         </div>}
       </div>}
+      {showEd&&showPv&&<Splitter onDrag={dragSplit} onReset={resetEp}/>}
       {showPv&&<div style={{padding:'16px 22px',overflowY:'auto',maxHeight:'calc(100vh - 300px)'}}>
         {(()=>{const [main,raw,off]=splitRaw(md);return <>
           <Markdown md={main} onWiki={onWiki} onToggleTask={toggleTask}/>
@@ -36693,14 +36721,35 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,titles=[],allTa
     </div>
   </div>;
 }
-function SearchView({notes,onPick}){
-  const {Card,Badge}=window.HDWorkbookDesignSystem_ad60e4;const [q,setQ]=React.useState('');
+function SearchView({notes,onPick,onWiki}){
+  const {Card,Badge,Button}=window.HDWorkbookDesignSystem_ad60e4;const [q,setQ]=React.useState('');
+  const [sel,setSel]=React.useState(null); /* 결과를 누르면 옮겨가지 않고 오른쪽에 띄운다 */
+  const [rw,setRw,resetRw]=usePaneSize('searchPane',420);
+  const cur=notes.find(n=>n.id===sel)||null;
   const hits=q.trim()?notes.map(n=>{const L=n.md.split('\n');const ls=L.map((l,i)=>[l,i]).filter(([l])=>l.toLowerCase().includes(q.toLowerCase()));const th=n.title.toLowerCase().includes(q.toLowerCase());return ls.length||th?{n,ls:ls.slice(0,3),score:ls.length+(th?5:0)}:null;}).filter(Boolean).sort((a,b)=>b.score-a.score):[];
   const hl=s=>{const i=s.toLowerCase().indexOf(q.toLowerCase());return i<0?s:<>{s.slice(0,i)}<mark style={{background:'var(--wb-yellow-hl)'}}>{s.slice(i,i+q.length)}</mark>{s.slice(i+q.length)}</>;};
-  return <Card title="전문 검색" badge={q&&<Badge tone="muted">{hits.length}개 노트</Badge>}>
-    <TextInput autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·본문 검색" style={{fontSize:15,padding:'8px 12px',marginBottom:12}}/>
-    {hits.map(h=><div key={h.n.id} onClick={()=>onPick(h.n.id)} style={{padding:'10px 12px',border:'1px solid var(--border-default)',marginBottom:6,cursor:'pointer',borderRadius:4}}><div style={{fontWeight:600,fontSize:'var(--fs-md)'}}>📄 {hl(h.n.title)} <span style={{color:SCOPE_COLOR[h.n.scope||'work'],fontWeight:400,fontSize:'var(--fs-sm)'}}>● {SCOPE_LABEL[h.n.scope||'work']}</span></div>{h.ls.map(([l,i])=><div key={i} style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginTop:3,fontFamily:'var(--font-mono)',fontSize:12}}><span style={{color:'var(--text-label)',marginRight:8}}>{i+1}</span>{hl(l)}</div>)}</div>)}
+  const results=<>
+    {hits.map(h=><div key={h.n.id} onClick={()=>setSel(h.n.id)} onDoubleClick={()=>onPick(h.n.id)}
+      style={{padding:'10px 12px',border:'1px solid '+(h.n.id===sel?'var(--border-strong)':'var(--border-default)'),background:h.n.id===sel?'var(--surface-active)':'#fff',marginBottom:6,cursor:'pointer',borderRadius:4}}>
+      <div style={{fontWeight:600,fontSize:'var(--fs-md)'}}>📄 {hl(h.n.title)} <span style={{color:SCOPE_COLOR[h.n.scope||'work'],fontWeight:400,fontSize:'var(--fs-sm)'}}>● {SCOPE_LABEL[h.n.scope||'work']}</span></div>
+      {h.ls.map(([l,i])=><div key={i} style={{color:'var(--text-muted)',marginTop:3,fontFamily:'var(--font-mono)',fontSize:12}}><span style={{color:'var(--text-label)',marginRight:8}}>{i+1}</span>{hl(l)}</div>)}</div>)}
     {q&&!hits.length&&<div style={{color:'var(--text-label)',padding:20,textAlign:'center'}}>결과 없음</div>}
+    {!q&&<div style={{color:'var(--text-label)',padding:20,textAlign:'center'}}>검색어를 입력하세요 · 결과를 누르면 오른쪽에 노트가 열립니다</div>}</>;
+  return <Card title="전문 검색" badge={q&&<Badge tone="muted">{hits.length}개 노트</Badge>}
+    toolbarRight={cur&&<Button variant="secondary" size="sm" onClick={()=>onPick(cur.id)}>노트에서 열기 →</Button>}>
+    <TextInput autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·본문 검색" style={{fontSize:15,padding:'8px 12px',marginBottom:12}}/>
+    {!cur?results:
+      <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 5px '+rw+'px',alignItems:'start'}}>
+        <div style={{overflowY:'auto',maxHeight:'calc(100vh - 300px)',paddingRight:4}}>{results}</div>
+        <Splitter onDrag={dx=>setRw(w=>Math.max(260,Math.min(760,w-dx)))} onReset={resetRw}/>
+        <div style={{border:'1px solid var(--border-default)',padding:'14px 16px',overflowY:'auto',maxHeight:'calc(100vh - 300px)',minWidth:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,paddingBottom:6,borderBottom:'1px solid var(--border-default)'}}>
+            <b style={{fontSize:'var(--fs-lg)'}}>{cur.title}</b>
+            <span style={{color:SCOPE_COLOR[cur.scope||'work'],fontSize:'var(--fs-sm)'}}>● {SCOPE_LABEL[cur.scope||'work']}</span>
+            <span style={{marginLeft:'auto',cursor:'pointer',color:'var(--text-label)'}} onClick={()=>setSel(null)}>✕</span></div>
+          <div style={{fontSize:'var(--fs-sm)'}}><Markdown md={splitRaw(cur.md)[0]} onWiki={onWiki}/></div>
+        </div>
+      </div>}
   </Card>;
 }
 /* 그래프: 드래그로 재배치 · 휠 확대 · 배경 드래그 이동 · Shift+드래그로 연결 · 간선 클릭으로 해제 */
@@ -36816,7 +36865,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v2.1';
+const APP_VERSION='v2.2';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
