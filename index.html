@@ -36129,7 +36129,7 @@ function parseMsg(buf){if(!window.MsgReader)throw new Error('.msg 파서가 로�
   tryStr('10130102',a=>Gmail.stripHtml(decodeBytes(a,CP_NAMES[d.internetCodepage]||ansi)),'html/bin');
   if(!body&&raw['10090102']&&window.decompressRTF){try{const bytes=decompressRTF(Array.from(raw['10090102']));const rtf=String.fromCharCode.apply(null,bytes.length<300000?bytes:bytes.slice(0,300000));body=rtfToText(rtf);src='rtf';}catch(e){src='rtf-err:'+e.message;}}
   if(!body&&d.body)body=d.body.trim(),src='lib';
-  if(!body)body='(본문 없음 · 파서 진단 v2: 속성 '+tags.filter(t=>!/^(0037|0c1a|0c1f|0e04|0e03|3001|39fe|0e1d|0070|1035|300b|0e07|0039|0e06|3fde|3ffd)/.test(t)).join(' ')+' · 코드페이지 '+(cp||'-')+' · 시도 '+(src||'-')+')';
+  if(!body){body='(본문 없음 — 이 .msg 파일에는 본문이 포함되지 않았습니다. 회사 웹메일에서 .eml로 내려받아 다시 드롭하세요)';console.info('msg props',tags.join(' '),'cp',cp,'src',src);}
   const dt=new Date(d.messageDeliveryTime||d.clientSubmitTime||d.lastModificationTime||'');
   return {from,to,cc,subject:d.subject||d.normalizedSubject||'(제목 없음)',date:isNaN(dt)?nowStamp():dt.toISOString(),body:body.replace(/\r\n/g,'\n').trim(),attachments:(d.attachments||[]).filter(a=>!a.attachmentHidden).map(a=>a.fileName||a.fileNameShort).filter(Boolean)};}
 function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
@@ -36507,7 +36507,7 @@ function GraphView({notes,sel,onPick}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v1.6';
+const APP_VERSION='v1.7';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
