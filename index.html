@@ -36039,25 +36039,90 @@ function mailNav(st,set,db){
   const accs=[{id:'all',label:'전체 메일'+(cnt('all')?' · '+cnt('all'):'')},...db.accounts.map(a=>({id:a.id,label:a.label+(cnt(a.id)?' · '+cnt(a.id):'')}))];
   return [{label:'계정',items:accs,value:st.acc,onChange:v=>set({acc:v,sel:null})},{label:'폴더',items:FOLDERS,value:st.folder,onChange:v=>set({folder:v,sel:null})}];
 }
-function parseEml(text){const hdrEnd=text.search(/\r?\n\r?\n/);const hdr=hdrEnd<0?text:text.slice(0,hdrEnd),body=hdrEnd<0?'':text.slice(hdrEnd).trim();const g=k=>{const m=new RegExp('^(?:'+k+')\\s*:\\s*(.*)$','mi').exec(hdr);return m?m[1].trim():'';};
-  const dt=g('Date|날짜|보낸 날짜');const d=new Date(dt);return {from:g('From|보낸 사람'),to:g('To|받는 사람'),subject:g('Subject|제목')||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:body.replace(/=\r?\n/g,'')};}
 
-/* Outlook .msg 파싱 (vendor/msgreader.js). 본문 우선순위: 텍스트 → HTML(태그 제거) → 압축 RTF(디코드 후 텍스트 추출) */
-function rtfToText(rtf){let s=rtf.replace(/\{\\\*\\[^{}]*\}/g,'');s=s.replace(/\{\\(fonttbl|colortbl|stylesheet|info|htmltag)[^{}]*(\{[^{}]*\})*[^{}]*\}/g,'');
-  s=s.replace(/\\'([0-9a-f]{2})/gi,(m,h)=>String.fromCharCode(parseInt(h,16))).replace(/\\u(-?\d+)\s?\??/g,(m,n)=>String.fromCharCode((+n+65536)%65536)).replace(/\\par[d]?\b|\\line\b/g,'\n').replace(/\\tab\b/g,'\t').replace(/\\[a-z]+-?\d* ?/gi,'').replace(/[{}]/g,'').replace(/\r?\n\s*\r?\n/g,'\n\n');return s.trim();}
+/* ---------- 인코딩 유틸 ---------- */
+const CP_NAMES={949:'euc-kr',51949:'euc-kr',1200:'utf-16le',65001:'utf-8',932:'shift_jis',936:'gbk',1252:'windows-1252'};
+function decodeBytes(bytes,charset){const cs=(charset||'utf-8').toString().toLowerCase().replace(/^ks_c_5601[-_]1987$/,'euc-kr').replace(/^cp949$|^ms949$|^x-windows-949$/,'euc-kr').replace(/^cp(\d+)$/,(m,n)=>CP_NAMES[+n]||'windows-'+n);
+  try{return new TextDecoder(cs).decode(bytes);}catch(_){}
+  const u=new TextDecoder('utf-8').decode(bytes);if(!/�/.test(u))return u;try{return new TextDecoder('euc-kr').decode(bytes);}catch(_){return u;}}
+const latin1Bytes=str=>Uint8Array.from(str,c=>c.charCodeAt(0)&255);
+function b64Bytes(s){try{return latin1Bytes(atob(s.replace(/[^A-Za-z0-9+/=]/g,'')));}catch(_){return new Uint8Array();}}
+function qpBytes(s){const out=[];const t=s.replace(/=\r?\n/g,'');for(let i=0;i<t.length;i++){if(t[i]==='='&&/^[0-9A-Fa-f]{2}$/.test(t.substr(i+1,2))){out.push(parseInt(t.substr(i+1,2),16));i+=2;}else out.push(t.charCodeAt(i)&255);}return Uint8Array.from(out);}
+/* RFC 2047: =?charset?B|Q?...?= */
+function decodeWords(s){return (s||'').replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=(\s+(?==\?))?/g,(m,cs,enc,txt)=>decodeBytes(enc.toUpperCase()==='B'?b64Bytes(txt):qpBytes(txt.replace(/_/g,' ')),cs));}
+
+/* ---------- .eml / MIME ---------- */
+function parseMimeHeaders(hdr){const H={};hdr.replace(/\r?\n[ \t]+/g,' ').split(/\r?\n/).forEach(l=>{const i=l.indexOf(':');if(i>0)H[l.slice(0,i).trim().toLowerCase()]=l.slice(i+1).trim();});return H;}
+function param(v,name){const m=new RegExp(name+'(\\*)?=\\s*"?([^";]+)"?','i').exec(v||'');if(!m)return '';let val=m[2].trim();
+  if(m[1]||/^[^']*''/.test(val)){const mm=/^([^']*)'[^']*'(.*)$/.exec(val);if(mm){const cs=mm[1]||'utf-8';const bytes=Uint8Array.from(mm[2].replace(/%([0-9A-Fa-f]{2})/g,(x,h)=>String.fromCharCode(parseInt(h,16))),c=>c.charCodeAt(0)&255);val=decodeBytes(bytes,cs);}}
+  return val;}
+/* MIME 파트를 재귀로 훑어 text/plain(우선) 또는 text/html 본문과 첨부 파일명을 모은다 */
+function mimeBody(raw,ct,cte,out){const type=(ct||'text/plain').split(';')[0].trim().toLowerCase();
+  if(type.startsWith('multipart/')){const b=param(ct,'boundary');if(!b)return;const parts=('\n'+raw).split(new RegExp('\\r?\\n--'+b.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:--)?(?=\\r?\\n|$)'));
+    parts.slice(1).forEach(pt=>{const i=pt.search(/\r?\n\r?\n/);if(i<0)return;const H=parseMimeHeaders(pt.slice(0,i));mimeBody(pt.slice(i).replace(/^\r?\n\r?\n/,''),H['content-type'],H['content-transfer-encoding'],out,H['content-disposition']);});return;}
+  const disp=arguments[4]||'';const fn=decodeWords(param(disp,'filename')||param(ct,'name'));
+  if(/attachment/i.test(disp)||(fn&&!type.startsWith('text/'))){if(fn)out.attachments.push(fn);return;}
+  if(!type.startsWith('text/'))return;
+  const enc=(cte||'').toLowerCase();const bytes=/base64/.test(enc)?b64Bytes(raw):/quoted-printable/.test(enc)?qpBytes(raw):latin1Bytes(raw);
+  const txt=decodeBytes(bytes,param(ct,'charset')||'utf-8');
+  if(type==='text/plain'){if(!out.plain)out.plain=txt;}else if(type==='text/html'){if(!out.html)out.html=txt;}}
+function parseEml(text){const hdrEnd=text.search(/\r?\n\r?\n/);const hdr=hdrEnd<0?text:text.slice(0,hdrEnd),rawBody=hdrEnd<0?'':text.slice(hdrEnd).replace(/^\r?\n\r?\n/,'');
+  const H=parseMimeHeaders(hdr);const g=(...ks)=>{for(const k of ks){if(H[k])return decodeWords(H[k]);}return '';};
+  const out={plain:'',html:'',attachments:[]};
+  if(H['content-type']||H['content-transfer-encoding'])mimeBody(rawBody,H['content-type'],H['content-transfer-encoding'],out);
+  let body=out.plain||(out.html?Gmail.stripHtml(out.html):'')||rawBody.trim();
+  /* 한글 "보낸 사람/제목" 붙여넣기 형식도 지원 */
+  const kg=k=>{const m=new RegExp('^(?:'+k+')\\s*:\\s*(.*)$','mi').exec(hdr);return m?m[1].trim():'';};
+  const dt=g('date')||kg('날짜|보낸 날짜');const d=new Date(dt);
+  return {from:g('from')||kg('보낸 사람'),to:g('to')||kg('받는 사람'),cc:g('cc')||kg('참조'),subject:g('subject')||kg('제목')||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:body.replace(/\r\n/g,'\n').trim(),attachments:out.attachments};}
+
+/* ---------- Outlook .msg ---------- */
+/* RTF → 텍스트. Outlook의 "fromhtml" RTF(HTML을 RTF로 감싼 것)와 일반 RTF 모두 처리. \'xx 바이트는 코드페이지로 디코드 */
+function rtfToText(rtf){
+  const cpm=/\\ansicpg(\d+)/.exec(rtf);const cp=cpm?+cpm[1]:1252;const charset=CP_NAMES[cp]||('windows-'+cp);
+  const SKIP=/^(fonttbl|colortbl|stylesheet|info|pict|object|themedata|colorschememapping|latentstyles|datastore|xmlnstbl|listtable|listoverridetable|rsidtbl|generator|pntext|fldinst|header|footer|footnote|annotation|userprops|panose|blipuid|shpinst|sp|sn|sv|shprslt)$/;
+  const out=[];let bytes=[];const flush=()=>{if(bytes.length){out.push(decodeBytes(Uint8Array.from(bytes),charset));bytes=[];}};
+  const stack=[];let skip=0,htmlrtf=0,uc=1,i=0;const n=rtf.length;
+  const push=s=>{if(!skip&&!htmlrtf){flush();out.push(s);}};
+  while(i<n){const c=rtf[i];
+    if(c==='{'){stack.push({skip,htmlrtf,uc});i++;
+      /* {\*\dest ...} : 알 수 없는 목적지 그룹은 통째로 건너뜀 */
+      if(rtf[i]==='\\'&&rtf[i+1]==='*'){const dm=/^\\\*\\(m?htmltag)/.exec(rtf.slice(i,i+12));if(!dm)skip++;i+=2;}continue;}
+    if(c==='}'){flush();const st=stack.pop()||{skip:0,htmlrtf:0,uc:1};skip=st.skip;htmlrtf=st.htmlrtf;uc=st.uc;i++;continue;}
+    if(c==='\\'){const nx=rtf[i+1];
+      if(nx==="'"){const h=rtf.substr(i+2,2);if(!skip&&!htmlrtf)bytes.push(parseInt(h,16));i+=4;continue;}
+      if(nx==='\\'||nx==='{'||nx==='}'){push(nx);i+=2;continue;}
+      if(nx==='~'){push(' ');i+=2;continue;}if(nx==='-'||nx==='_'){i+=2;continue;}
+      if(nx==='\n'||nx==='\r'){push('\n');i+=2;continue;}
+      const m=/^\\([a-zA-Z]+)(-?\d+)? ?/.exec(rtf.slice(i,i+40));if(!m){i++;continue;}
+      const w=m[1],v=m[2]===undefined?null:+m[2];i+=m[0].length;
+      if(w==='u'&&v!==null){push(String.fromCharCode((v+65536)%65536));/* \uc 개수만큼 대체 문자 건너뜀 */let k=uc;while(k>0&&i<n){if(rtf[i]==='\\'&&rtf[i+1]==="'"){i+=4;}else if(rtf[i]==='\\'||rtf[i]==='{'||rtf[i]==='}')break;else i++;k--;}continue;}
+      if(w==='uc'){uc=v||0;continue;}
+      if(w==='htmlrtf'){htmlrtf=v===0?0:1;continue;}
+      if(SKIP.test(w)){skip++;continue;}
+      if(w==='par'||w==='line'||w==='sect'||w==='page')push('\n');else if(w==='tab')push('\t');else if(w==='cell')push('\t');else if(w==='row')push('\n');else if(w==='emdash')push('—');else if(w==='endash')push('–');else if(w==='bullet')push('•');else if(w==='ldblquote'||w==='rdblquote')push('"');else if(w==='lquote'||w==='rquote')push("'");
+      continue;}
+    if(c==='\r'||c==='\n'){i++;continue;}
+    if(!skip&&!htmlrtf)bytes.push(c.charCodeAt(0)&255);i++;}
+  flush();
+  let t=out.join('');
+  if(/\\fromhtml|<\/?(p|div|br|span|table)\b/i.test(rtf.slice(0,400))||/<[a-z]+[^>]*>/i.test(t))t=Gmail.stripHtml(t);
+  return t.replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();}
 function parseMsg(buf){if(!window.MsgReader)throw new Error('.msg 파서가 로드되지 않았습니다');
   let d=new MsgReader(buf).getFileData();
-  if(d.messageCodepage&&d.messageCodepage!==1200&&d.messageCodepage!==65001){try{d=new MsgReader(buf,{ansiEncoding:'cp'+d.messageCodepage}).getFileData();}catch(_){}}
+  const cp=d.messageCodepage||d.internetCodepage;
+  if(cp&&cp!==1200&&cp!==65001){try{d=new MsgReader(buf,{ansiEncoding:CP_NAMES[cp]||('cp'+cp)}).getFileData();}catch(_){}}
   const name=(n,e)=>n&&e&&n!==e?n+' <'+e+'>':(e||n||'');
   const from=name(d.senderName,d.senderSmtpAddress||d.senderEmail);
-  const rc=(d.recipients||[]);const list=t=>rc.filter(r=>t?r.recipType===t:true).map(r=>name(r.name,r.smtpAddress||r.email)).filter(Boolean).join(', ');
-  const to=list('to')||list()||'',cc=list('cc');
-  let body=d.body||'';
-  if(!body&&d.bodyHtml)body=Gmail.stripHtml(d.bodyHtml);
-  if(!body&&d.html)body=Gmail.stripHtml(new TextDecoder('utf-8').decode(d.html));
-  if(!body&&d.compressedRtf&&window.decompressRTF){try{const bytes=decompressRTF(Array.from(d.compressedRtf));body=rtfToText(new TextDecoder('utf-8').decode(Uint8Array.from(bytes)));}catch(e){console.warn('rtf',e);}}
+  const rc=(d.recipients||[]);const isCc=r=>r.recipType==='cc'||r.recipType===2;const list=f=>rc.filter(f).map(r=>name(r.name,r.smtpAddress||r.email)).filter(Boolean).join(', ');
+  const to=list(r=>!isCc(r)),cc=list(isCc);
+  let body=(d.body||'').trim(),src='body';
+  if(!body&&d.bodyHtml){body=Gmail.stripHtml(d.bodyHtml);src='bodyHtml';}
+  if(!body&&d.html&&d.html.length){body=Gmail.stripHtml(decodeBytes(d.html,CP_NAMES[d.internetCodepage]||'utf-8'));src='html';}
+  if(!body&&d.compressedRtf&&d.compressedRtf.length&&window.decompressRTF){try{const bytes=decompressRTF(Array.from(d.compressedRtf));const rtf=String.fromCharCode.apply(null,bytes.length<200000?bytes:bytes.slice(0,200000));body=rtfToText(rtf);src='rtf';}catch(e){console.warn('rtf',e);src='rtf-error:'+e.message;}}
+  if(!body)body='(본문 없음 · 파서 진단: '+['body','bodyHtml','html','compressedRtf'].map(k=>k+'='+(d[k]?(d[k].length||1):0)).join(' ')+' · 마지막 시도 '+src+')';
   const dt=new Date(d.messageDeliveryTime||d.clientSubmitTime||d.lastModificationTime||'');
-  return {from,to,cc,subject:d.subject||d.normalizedSubject||'(제목 없음)',date:isNaN(dt)?nowStamp():dt.toISOString(),body:(body||'').replace(/\r\n/g,'\n').trim(),attachments:(d.attachments||[]).filter(a=>!a.attachmentHidden).map(a=>a.fileName||a.fileNameShort).filter(Boolean)};}
+  return {from,to,cc,subject:d.subject||d.normalizedSubject||'(제목 없음)',date:isNaN(dt)?nowStamp():dt.toISOString(),body:body.replace(/\r\n/g,'\n').trim(),attachments:(d.attachments||[]).filter(a=>!a.attachmentHidden).map(a=>a.fileName||a.fileNameShort).filter(Boolean)};}
 function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const {Card,Button,Badge,InfoBar,Modal,DropZone}=window.HDWorkbookDesignSystem_ad60e4;
   const [q,setQ]=React.useState('');
@@ -36115,7 +36180,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
               <span style={{color:'var(--text-label)'}}>받는 사람</span><span>{cur.to}</span>
               <span style={{color:'var(--text-label)'}}>날짜</span><span>{fmtDT(cur.date)} · <Badge tone="blue" style={{fontSize:10}}>{accOf(cur.acc).label}</Badge></span>
             </div>
-            {cur.attachments&&cur.attachments.length>0&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:10}}>📎 첨부 {cur.attachments.length}: {cur.attachments.join(' · ')} <span style={{color:'var(--text-label)'}}>(파일은 Gmail에서 열기)</span></div>}
+            {cur.attachments&&cur.attachments.length>0&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:10}}>📎 첨부 {cur.attachments.length}: {cur.attachments.join(' · ')} <span style={{color:'var(--text-label)'}}>(파일은 원본 메일에서 열기)</span></div>}
             <div style={{whiteSpace:'pre-wrap',fontSize:'var(--fs-md2)',lineHeight:1.65,color:'var(--text-body)'}}>{cur.body}</div>
           </>}
         </div>
