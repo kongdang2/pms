@@ -35852,6 +35852,83 @@ const PRI_LABEL={high:'높음',mid:'보통',low:'낮음'};
 const fmtDT=iso=>{const d=new Date(iso);return isNaN(d)?iso:d.getMonth()+1+'/'+d.getDate()+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());};
 Object.assign(window,{Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
 </script>
+<script type="text/babel">/* Gmail 연동: Google Identity Services(브라우저 OAuth 토큰) + Gmail REST API
+   흐름: 연결(승인 창) → 토큰(1시간) → 받은편지함/보낸편지함 가져오기 · 보내기
+   토큰은 sessionStorage에만 보관(탭 닫으면 사라짐). 비밀 키 없음 — 사용자가 Google 창에서 직접 승인 */
+const GIS_SRC='https://accounts.google.com/gsi/client';
+const GMAIL_SCOPE='https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
+const GMAIL_API='https://gmail.googleapis.com/gmail/v1/users/me/';
+
+function explainGmailError(e){const m=(e&&e.message)||String(e);
+  if(/popup_closed|access_denied/i.test(m))return 'Google 승인 창이 닫혔거나 거부됨 — 다시 연결하고 "허용"을 누르세요';
+  if(/popup_failed|popup blocked/i.test(m))return '팝업이 차단됨 — 주소창 오른쪽의 팝업 차단 아이콘에서 허용';
+  if(/idpiframe|origin_mismatch|not a valid origin|invalid_client/i.test(m))return 'Client ID 또는 승인된 JavaScript 원본이 맞지 않음 — Google 콘솔 Clients에서 https://kongdang2-ctrl.github.io 등록 확인';
+  if(/has not been used in project|is not enabled|accessNotConfigured/i.test(m))return 'Gmail API가 켜져 있지 않음 — Google 콘솔 API 및 서비스 › 라이브러리에서 Gmail API 사용 설정';
+  if(/403/.test(m)&&/insufficient|scope/i.test(m))return '권한 부족 — 연결을 끊고 다시 연결하며 메일 읽기·보내기 권한을 허용';
+  if(/401|invalid_token|Invalid Credentials/i.test(m))return '승인이 만료됨 — 🔗 계정 연결에서 다시 연결';
+  if(/verification|unverified|blocked/i.test(m))return '앱이 테스트 모드 — Google 콘솔 Audience › Test users에 본인 Gmail 추가';
+  if(/Failed to fetch/i.test(m))return 'Google에 접속 불가 — 네트워크 또는 사내망 차단';
+  return m;}
+
+const Gmail={
+  client:null,
+  get tok(){try{const t=JSON.parse(sessionStorage.getItem('pms.gtok')||'null');return t&&t.exp>Date.now()+30000?t:null;}catch(_){return null;}},
+  set tok(t){if(t)sessionStorage.setItem('pms.gtok',JSON.stringify(t));else sessionStorage.removeItem('pms.gtok');},
+  get connected(){return !!this.tok;},
+  async ensureLib(){if(window.google&&google.accounts&&google.accounts.oauth2)return;await loadScript(GIS_SRC);},
+  /* 승인 창 → 토큰. prompt:'' 이면 이미 승인한 사용자는 창이 잠깐 떴다 사라짐 */
+  async connect(opts={}){const cid=(Store.cfg.gmailClientId||'').trim();if(!cid)throw new Error('설정 › 메일 연동에 Gmail OAuth Client ID를 입력하세요');
+    await this.ensureLib();
+    return new Promise((ok,err)=>{
+      this.client=google.accounts.oauth2.initTokenClient({client_id:cid,scope:GMAIL_SCOPE,
+        callback:r=>{if(r.error){err(new Error(r.error+(r.error_description?' '+r.error_description:'')));return;}
+          this.tok={access:r.access_token,exp:Date.now()+(r.expires_in||3600)*1000};ok(this.tok);},
+        error_callback:e=>err(new Error(e.type||e.message||'popup_failed'))});
+      this.client.requestAccessToken({prompt:opts.prompt??''});});
+  },
+  async token(){if(this.tok)return this.tok.access;const t=await this.connect({prompt:''});return t.access;},
+  disconnect(){const t=this.tok;this.tok=null;if(t&&window.google)try{google.accounts.oauth2.revoke(t.access,()=>{});}catch(_){}},
+  async api(path,opt={}){const access=await this.token();
+    const r=await fetch(GMAIL_API+path,{...opt,headers:{Authorization:'Bearer '+access,'content-type':'application/json',...(opt.headers||{})}});
+    if(r.status===401){this.tok=null;throw new Error('401 invalid_token');}
+    const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error((j.error&&j.error.message)||('HTTP '+r.status));return j;},
+  async profile(){return this.api('profile');},
+
+  /* --- 메시지 파싱 --- */
+  b64url(s){return decodeURIComponent(escape(atob(s.replace(/-/g,'+').replace(/_/g,'/'))));},
+  b64urlBytes(s){const bin=atob(s.replace(/-/g,'+').replace(/_/g,'/'));return new TextDecoder('utf-8').decode(Uint8Array.from(bin,c=>c.charCodeAt(0)));},
+  stripHtml(h){return h.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi,'').replace(/<br\s*\/?>|<\/p>|<\/div>|<\/tr>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/\n{3,}/g,'\n\n').trim();},
+  bodyOf(payload){let plain='',html='';const walk=p=>{if(!p)return;if(p.parts)p.parts.forEach(walk);const d=p.body&&p.body.data;if(!d)return;if(p.mimeType==='text/plain'&&!plain)plain=this.b64urlBytes(d);else if(p.mimeType==='text/html'&&!html)html=this.b64urlBytes(d);};walk(payload);return plain||this.stripHtml(html)||'';},
+  toMail(msg,acc){const H={};(msg.payload.headers||[]).forEach(h=>H[h.name.toLowerCase()]=h.value);const labels=msg.labelIds||[];const d=new Date(H.date||Number(msg.internalDate));
+    return {id:'g:'+msg.id,gid:msg.id,acc,folder:labels.includes('SENT')?'sent':labels.includes('DRAFT')?'draft':'inbox',from:H.from||'',to:H.to||'',cc:H.cc||'',subject:H.subject||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:this.bodyOf(msg.payload).slice(0,20000),star:labels.includes('STARRED'),read:!labels.includes('UNREAD'),tags:[],attachments:(function(){const a=[];const w=p=>{if(!p)return;if(p.filename&&p.body&&p.body.attachmentId)a.push(p.filename);(p.parts||[]).forEach(w);};w(msg.payload);return a;})()};},
+
+  /* 받은편지함 + 보낸편지함 가져오기. 이미 있는 메일(gid)은 건너뛰고 읽음/별표만 갱신 */
+  async sync(acc,existing,onProgress){
+    const have=new Map(existing.filter(m=>m.gid).map(m=>[m.gid,m]));const out=[];let fetched=0,skipped=0;
+    for(const [label,max] of [['INBOX',60],['SENT',20]]){
+      const list=await this.api(`messages?labelIds=${label}&maxResults=${max}&q=${encodeURIComponent('newer_than:60d')}`);
+      const ids=(list.messages||[]).map(m=>m.id);
+      for(let i=0;i<ids.length;i+=10){ /* 10개씩 병렬 */
+        const chunk=ids.slice(i,i+10).filter(id=>{if(have.has(id)){skipped++;return false;}return true;});
+        const got=await Promise.all(chunk.map(id=>this.api(`messages/${id}?format=full`).catch(()=>null)));
+        got.filter(Boolean).forEach(m=>{out.push(this.toMail(m,acc));fetched++;});
+        onProgress&&onProgress(fetched,ids.length);
+      }
+    }
+    return {added:out,skipped};
+  },
+
+  /* 보내기: RFC 2822 텍스트 메일 → base64url */
+  async send({from,to,cc,subject,body}){
+    const enc=s=>'=?UTF-8?B?'+btoa(unescape(encodeURIComponent(s)))+'?=';
+    const lines=['From: '+from,'To: '+to];if(cc)lines.push('Cc: '+cc);
+    lines.push('Subject: '+enc(subject||'(제목 없음)'),'MIME-Version: 1.0','Content-Type: text/plain; charset="UTF-8"','Content-Transfer-Encoding: base64','',btoa(unescape(encodeURIComponent(body||''))));
+    const raw=btoa(unescape(encodeURIComponent(lines.join('\r\n')))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    return this.api('messages/send',{method:'POST',body:JSON.stringify({raw})});
+  }
+};
+Object.assign(window,{Gmail,explainGmailError});
+</script>
 <script type="text/babel">/* 로그인 화면 + 설정 모달(Supabase/API 키) */
 function Login({onLogin}){
   const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
@@ -35902,7 +35979,7 @@ function SettingsModal({open,onClose,onToast}){
       <InfoBar>사내 정책상 외부 IMAP·자동 전달은 보통 차단됩니다. 권장 운용:<br/>① <b>사내 PC</b> — Outlook 규칙으로 특정 폴더를 .msg/.eml 저장 → 이 앱 "가져오기"에 드롭. IT 허용 시 Microsoft Graph(Mail.Read) 테넌트 앱 등록으로 자동화.<br/>② <b>외부</b> — OWA에서 메일 본문 복사 → "붙여넣기 가져오기". 발송은 mailto:로 OWA/Outlook을 열어 보냅니다.</InfoBar>
       <Field label="Graph 앱(Client) ID — IT 승인 후"><TextInput value={c.graphClientId||''} onChange={set('graphClientId')} placeholder="선택"/></Field>
       <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>개인 메일 (Gmail)</div>
-      <InfoBar>Google Cloud Console에서 OAuth 클라이언트(웹)를 만들고 Gmail API를 켠 뒤 Client ID를 입력하면 "연결" 버튼이 활성화됩니다. 승인 리디렉션 URI에 이 앱을 호스팅한 주소를 등록해야 합니다.</InfoBar>
+      <InfoBar>Google 콘솔에서 Gmail API를 켜고 OAuth 클라이언트(웹)를 만든 뒤 Client ID를 입력하면 메일 화면의 🔗 계정 연결에서 "Google 연결"이 활성화됩니다(가이드 04). 호스팅 주소에서는 pms.config.js의 gmailClientId로도 지정할 수 있습니다.</InfoBar>
       <Field label="Gmail OAuth Client ID"><TextInput value={c.gmailClientId||''} onChange={set('gmailClientId')} placeholder="xxxx.apps.googleusercontent.com"/></Field>
     </>}
     {tab==='ai'&&<ClaudeTab c={c} setC={setC}/>}
@@ -35957,13 +36034,25 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const send=(draft,asDraft)=>{const a=accOf(draft.acc);const m={id:uid(),acc:draft.acc,folder:asDraft?'draft':'sent',from:a.email,to:draft.to,cc:draft.cc,subject:draft.subject||'(제목 없음)',date:nowStamp(),body:draft.body,star:false,read:true,tags:[]};
     setDb('mails',[m,...db.mails]);set({compose:null});
     if(asDraft){toast('임시보관함에 저장');return;}
-    if(a.status==='connected'){toast('API 발송 · '+a.label);return;}
+    if(a.provider==='gmail'&&a.status==='connected'){toast('📤 Gmail로 보내는 중…');Gmail.send({from:a.email,to:draft.to,cc:draft.cc,subject:draft.subject,body:draft.body}).then(()=>toast('Gmail 발송 완료 · '+draft.to)).catch(e=>{toast('⚠ 발송 실패: '+explainGmailError(e));upd(m.id,{folder:'draft'});});return;}
     location.href='mailto:'+encodeURIComponent(draft.to)+'?'+(draft.cc?'cc='+encodeURIComponent(draft.cc)+'&':'')+'subject='+encodeURIComponent(draft.subject)+'&body='+encodeURIComponent(draft.body);toast('기본 메일 앱으로 발송 · 보낸편지함에 기록');};
+  const [busy,setBusy]=React.useState('');
+  const connectGmail=async a=>{setBusy('connect');try{await Gmail.connect({prompt:'consent'});const pr=await Gmail.profile();
+      setDb('accounts',db.accounts.map(x=>x.id===a.id?{...x,email:pr.emailAddress||x.email,status:'connected',note:'Gmail API 연결됨 · 동기화 버튼으로 가져오기'}:x));toast('Google 연결됨 · '+pr.emailAddress);}
+    catch(e){toast('⚠ '+explainGmailError(e));}setBusy('');};
+  const disconnectGmail=a=>{Gmail.disconnect();setDb('accounts',db.accounts.map(x=>x.id===a.id?{...x,status:'ready',note:'Gmail API OAuth — 연결 버튼으로 다시 연결'}:x));toast('연결 해제');};
+  const syncAll=async()=>{const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');if(!targets.length){set({accOpen:true});toast('연결된 API 계정 없음 · Google 연결을 먼저 하세요');return;}
+    setBusy('sync');let total=0;
+    try{for(const a of targets){const {added,skipped}=await Gmail.sync(a.id,db.mails,(n,all)=>toast(`🔄 ${a.label} · ${n}/${all}건 가져오는 중`));
+        if(added.length){setDb('mails',[...added,...db.mails.filter(m=>!added.some(x=>x.id===m.id))]);}total+=added.length;
+        toast(added.length?`✓ ${added.length}건 새로 가져옴 · ${skipped}건은 이미 있음`:'새 메일 없음');}}
+    catch(e){toast('⚠ 동기화 실패: '+explainGmailError(e));}
+    setBusy('');};
   const importMails=(items,acc)=>{const ms=items.map(p=>({id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p}));setDb('mails',[...ms,...db.mails]);set({importOpen:false});toast(ms.length+'건 가져옴 · '+accOf(acc).label);};
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" onClick={()=>toast('연결된 API 계정 없음 · 설정에서 연결하세요')}>동기화</Button></>}
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button></>}
       toolbarRight={<><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·보낸 사람·본문" style={{width:220,padding:'4px 8px'}}/><Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
       <div style={{display:'grid',gridTemplateColumns:'minmax(280px,360px) minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
         <div style={{borderRight:'1px solid var(--border-default)',overflowY:'auto',maxHeight:'calc(100vh - 262px)'}}>
@@ -35984,6 +36073,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
               <span style={{color:'var(--text-label)'}}>받는 사람</span><span>{cur.to}</span>
               <span style={{color:'var(--text-label)'}}>날짜</span><span>{fmtDT(cur.date)} · <Badge tone="blue" style={{fontSize:10}}>{accOf(cur.acc).label}</Badge></span>
             </div>
+            {cur.attachments&&cur.attachments.length>0&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:10}}>📎 첨부 {cur.attachments.length}: {cur.attachments.join(' · ')} <span style={{color:'var(--text-label)'}}>(파일은 Gmail에서 열기)</span></div>}
             <div style={{whiteSpace:'pre-wrap',fontSize:'var(--fs-md2)',lineHeight:1.65,color:'var(--text-body)'}}>{cur.body}</div>
           </>}
         </div>
@@ -35996,7 +36086,9 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
         <span style={{fontSize:20}} aria-hidden="true">{a.provider==='gmail'?'📮':'📧'}</span>
         <div style={{flex:1,minWidth:0}}><div style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{a.label} <span style={{color:'var(--text-label)',fontWeight:400}}>{a.email}</span></div><div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>{a.note}</div></div>
         {a.status==='connected'?<Badge tone="linked">🔗 연결됨</Badge>:a.status==='manual'?<Badge tone="pill">수동 연동</Badge>:<Badge tone="pill">연결 준비</Badge>}
-        {a.provider==='gmail'&&<Button size="sm" variant="accent" disabled={!Store.cfg.gmailClientId} title={Store.cfg.gmailClientId?'Google 계정으로 연결':'설정에서 Client ID를 먼저 입력'} onClick={()=>toast('OAuth 창을 엽니다 (호스팅 환경에서 작동)')}>Google 연결</Button>}
+        {a.provider==='gmail'&&(a.status==='connected'
+          ?<><Button size="sm" variant="gray" disabled={busy==='sync'} onClick={()=>{set({accOpen:false});syncAll();}}>🔄 동기화</Button><Button size="sm" variant="ghost" onClick={()=>disconnectGmail(a)}>연결 해제</Button></>
+          :<Button size="sm" variant="accent" disabled={!Store.cfg.gmailClientId||busy==='connect'} title={Store.cfg.gmailClientId?'Google 계정으로 연결':'설정에서 Client ID를 먼저 입력'} onClick={()=>connectGmail(a)}>{busy==='connect'?'승인 창 확인…':'Google 연결'}</Button>)}
         {a.provider==='outlook'&&<Button size="sm" variant="accent" disabled={!Store.cfg.graphClientId} title={Store.cfg.graphClientId?'Microsoft 계정으로 연결':'IT 승인 후 Client ID 입력'} onClick={()=>toast('Microsoft 로그인 창을 엽니다')}>Graph 연결</Button>}
       </div>)}
       <div style={{marginTop:10}}><Button variant="ghost" size="sm" onClick={()=>{set({accOpen:false});openSettings('mail');}}>⚙ 연동 설정 열기</Button></div>
