@@ -35977,7 +35977,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.2'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.3'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36752,109 +36752,252 @@ function SearchView({notes,onPick,onWiki}){
       </div>}
   </Card>;
 }
-/* 그래프: 드래그로 재배치 · 휠 확대 · 배경 드래그 이동 · Shift+드래그로 연결 · 간선 클릭으로 해제 */
+/* ── 지식 그래프(3D) ──────────────────────────────────────────────
+   배경 드래그 = 회전 · Shift+배경 드래그 = 화면 이동 · 휠 = 확대
+   노드 드래그 = 위치 고정 · Shift+노드 드래그 = 연결 · 선 클릭 = 연결 해제
+   직접 만든 3차원 힘-방향 배치 + 원근 투영(외부 라이브러리 없음) */
+const G3={
+  color:{work:'#6FB3E8',personal:'#4BC79B'},   /* 어두운 배경에서 잘 보이도록 밝게 */
+  sel:'#FFC24A', focal:760, minDist:340, maxDist:2400,
+};
+/* 색을 밝게(amt>0) 또는 어둡게(amt<0) */
+function gTint(hex,amt){const n=parseInt(hex.slice(1),16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  const m=v=>Math.max(0,Math.min(255,Math.round(amt>0?v+(255-v)*amt:v*(1+amt))));
+  return 'rgb('+m(r)+','+m(g)+','+m(b)+')';}
+function gRgba(hex,a){const n=parseInt(hex.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a.toFixed(3)+')';}
+/* 캔버스 위에 얹는 작은 버튼 */
+function GBtn({on,onClick,title,children}){
+  const [h,setH]=React.useState(false);
+  return <button type="button" title={title} onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
+    style={{border:'1px solid '+(on?'rgba(255,201,74,.55)':'rgba(255,255,255,.18)'),borderRadius:6,padding:'4px 10px',
+      background:on?'rgba(255,201,74,.16)':h?'rgba(255,255,255,.12)':'rgba(255,255,255,.05)',
+      color:on?'#FFD782':'rgba(226,236,245,.9)',font:'500 11.5px var(--font-sans)',cursor:'pointer',backdropFilter:'blur(6px)'}}>{children}</button>;
+}
 function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
   const {Button}=window.HDWorkbookDesignSystem_ad60e4;
-  const cvRef=React.useRef();const P=React.useRef({});const V=React.useRef({x:0,y:0,k:1});
+  const cvRef=React.useRef();
+  const P=React.useRef({});                                   /* 노드의 3차원 위치 */
+  const CAM=React.useRef({yaw:.55,pitch:-.3,dist:980,px:0,py:0});
+  const SCR=React.useRef({});                                 /* 마지막 프레임의 화면 좌표 — 클릭 판정용 */
+  const A=React.useRef(1);                                    /* 배치가 식는 정도 */
+  const FIT=React.useRef(true);                               /* 배치가 식으면 화면에 꽉 차게 거리 맞추기 */
   const S=React.useRef({mode:null,node:null,from:null,mx:0,my:0,moved:false});
   const [tick,setTick]=React.useState(0);const [hint,setHint]=React.useState('');
+  const [auto,setAuto]=React.useState(true);                  /* 천천히 자동 회전 */
+  const [flat,setFlat]=React.useState(false);                 /* 평면(2D)으로 눕히기 */
+  const [gw,setGw,resetGw]=usePaneSize('graphPane',340);
   const cur=notes.find(n=>n.id===sel)||null;
+
   const idxByTitle={};notes.forEach(n=>{idxByTitle[n.title]=n.id;});
   const edges=[];notes.forEach(n=>wikiLinks(n.md).forEach(t=>{const to=idxByTitle[t];if(to&&to!==n.id)edges.push({from:n.id,to});}));
   const deg={};edges.forEach(e=>{deg[e.from]=(deg[e.from]||0)+1;deg[e.to]=(deg[e.to]||0)+1;});
   const dataKey=notes.map(n=>n.id).join(',')+'|'+edges.map(e=>e.from+'>'+e.to).join(',');
+  /* 그리기 루프는 계속 도는 중이므로 최신 값은 ref로 넘긴다(효과를 다시 시작하지 않도록) */
+  const R=React.useRef({});R.current={notes,edges,deg,sel,auto,flat,hover:(R.current.hover||null)};
 
+  React.useEffect(()=>{A.current=1;FIT.current=true;},[dataKey]);
   React.useEffect(()=>{
-    const cv=cvRef.current;if(!cv)return;
-    const W=()=>cv.width=cv.clientWidth, H=()=>cv.height=cv.clientHeight;
-    W();H();
-    notes.forEach((n,i)=>{if(!P.current[n.id])P.current[n.id]={x:cv.width/2+Math.cos(i*2.4)*(90+i*7),y:cv.height/2+Math.sin(i*2.4)*(90+i*7),vx:0,vy:0,fx:null,fy:null};});
+    const cv=cvRef.current;if(!cv)return;const ctx=cv.getContext('2d');
+    let dpr=1,cw=0,ch=0;
+    const size=()=>{dpr=Math.min(2,window.devicePixelRatio||1);cw=cv.clientWidth;ch=cv.clientHeight;
+      cv.width=Math.round(cw*dpr);cv.height=Math.round(ch*dpr);};
+    size();
+    /* 새 노드는 구면에 고르게 뿌린다(피보나치 배치) */
+    const N=notes.length;const rad=90+26*Math.sqrt(Math.max(1,N));
+    notes.forEach((n,i)=>{if(P.current[n.id])return;
+      const t=(i+.5)/Math.max(1,N),phi=Math.acos(1-2*t),th=Math.PI*(1+Math.sqrt(5))*i;
+      P.current[n.id]={x:rad*Math.sin(phi)*Math.cos(th),y:rad*Math.sin(phi)*Math.sin(th),z:rad*Math.cos(phi),vx:0,vy:0,vz:0,fx:null,fy:null,fz:null};});
     Object.keys(P.current).forEach(id=>{if(!notes.some(n=>n.id===id))delete P.current[id];});
-    let alpha=1,raf;window.__pmsGraphPos=P.current;window.__pmsGraphView=V.current; /* 디버그·테스트용 위치 노출 */
-    const ctx=cv.getContext('2d');
+    window.__pmsGraphPos=P.current;window.__pmsGraphView=CAM.current;
+
+    let raf;
     const step=()=>{
-      const cw=cv.width,ch=cv.height;const arr=notes.map(n=>P.current[n.id]);
-      if(alpha>0.005){
-        for(let i=0;i<arr.length;i++)for(let j=i+1;j<arr.length;j++){const a=arr[i],b=arr[j];let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;const f=Math.min(30,3200/(d*d))*alpha;a.vx-=dx/d*f;a.vy-=dy/d*f;b.vx+=dx/d*f;b.vy+=dy/d*f;}
-        edges.forEach(e=>{const a=P.current[e.from],b=P.current[e.to];if(!a||!b)return;const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;const f=(d-125)*0.03*alpha;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;});
-        arr.forEach(n=>{n.vx+=(cw/2-n.x)*0.0016*alpha;n.vy+=(ch/2-n.y)*0.0016*alpha;});
-        alpha*=0.985;
+      const {notes:NS,edges:ES,deg:DG,sel:SEL,auto:AU,flat:FL,hover:HV}=R.current;
+      const cam=CAM.current;const arr=NS.map(n=>P.current[n.id]).filter(Boolean);
+      /* ① 힘 계산 */
+      if(A.current>0.004){const al=A.current;
+        for(let i=0;i<arr.length;i++)for(let j=i+1;j<arr.length;j++){const a=arr[i],b=arr[j];
+          let dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z;const d=Math.max(12,Math.hypot(dx,dy,dz));
+          const f=Math.min(30,7600/(d*d))*al;dx/=d;dy/=d;dz/=d;
+          a.vx-=dx*f;a.vy-=dy*f;a.vz-=dz*f;b.vx+=dx*f;b.vy+=dy*f;b.vz+=dz*f;}
+        ES.forEach(e=>{const a=P.current[e.from],b=P.current[e.to];if(!a||!b)return;
+          let dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z;const d=Math.max(1,Math.hypot(dx,dy,dz));
+          const f=(d-185)*0.024*al;dx/=d;dy/=d;dz/=d;
+          a.vx+=dx*f;a.vy+=dy*f;a.vz+=dz*f;b.vx-=dx*f;b.vy-=dy*f;b.vz-=dz*f;});
+        arr.forEach(p=>{p.vx-=p.x*0.0016*al;p.vy-=p.y*0.0016*al;p.vz-=p.z*0.0016*al;});
+        A.current*=0.987;
       }
-      arr.forEach(n=>{if(n.fx!=null){n.x=n.fx;n.y=n.fy;n.vx=n.vy=0;return;}n.vx*=0.82;n.vy*=0.82;n.x+=n.vx;n.y+=n.vy;});
-      const {x:tx,y:ty,k}=V.current;
-      ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,cw,ch);
-      ctx.setTransform(k,0,0,k,tx,ty);
-      /* 간선 */
-      edges.forEach(e=>{const a=P.current[e.from],b=P.current[e.to];if(!a||!b)return;
-        const hl=sel&&(e.from===sel||e.to===sel);
-        ctx.strokeStyle=hl?'#4E82AE':'#D5DCE4';ctx.lineWidth=hl?1.6/k:1/k;
-        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+      arr.forEach(p=>{
+        if(FL){p.vz-=p.z*0.06;p.vz*=0.7;}                     /* 평면 모드: 한 장으로 눕힌다 */
+        if(p.fx!=null){p.x=p.fx;p.y=p.fy;p.z=p.fz;p.vx=p.vy=p.vz=0;return;}
+        p.vx*=0.85;p.vy*=0.85;p.vz*=0.85;p.x+=p.vx;p.y+=p.vy;p.z+=p.vz;});
+      /* 배치가 자리를 잡으면 한 번, 전체가 보이도록 거리를 맞춘다 */
+      if(FIT.current&&A.current<0.08&&arr.length){
+        let m=0;arr.forEach(p=>{m=Math.max(m,Math.hypot(p.x,p.y,p.z));});
+        if(m>1){cam.dist=Math.max(G3.minDist,Math.min(G3.maxDist,(m+70)*G3.focal/(Math.min(cw,ch)*0.46)));
+          cam.px=cam.py=0;FIT.current=false;}
+      }
+      if(AU&&!S.current.mode)cam.yaw+=FL?0:0.0022;
+      if(FL){cam.pitch+=(0-cam.pitch)*0.12;cam.yaw+=(0-cam.yaw)*0.12;}
+
+      /* ② 투영 */
+      const cy=Math.cos(cam.yaw),sy=Math.sin(cam.yaw),cp=Math.cos(cam.pitch),sp=Math.sin(cam.pitch);
+      const k0=G3.focal/cam.dist;const sc={};
+      NS.forEach(n=>{const p=P.current[n.id];if(!p)return;
+        const x1=p.x*cy-p.z*sy,z1=p.x*sy+p.z*cy;
+        const y2=p.y*cp-z1*sp,z2=p.y*sp+z1*cp;
+        const k=G3.focal/Math.max(80,cam.dist+z2);
+        sc[n.id]={x:cw/2+cam.px+x1*k,y:ch/2+cam.py+y2*k,k,z:z2,
+          r:Math.max(3,(9+(DG[n.id]||0)*2.2)*k),
+          a:Math.max(.3,Math.min(1,(k/k0-.55)/.7))};});
+      SCR.current=sc;
+      /* 초점: 고른(또는 가리킨) 노드와 그 이웃만 또렷하게 */
+      const focus=HV||SEL;
+      const near=new Set();if(focus){near.add(focus);ES.forEach(e=>{if(e.from===focus)near.add(e.to);if(e.to===focus)near.add(e.from);});}
+      const dim=id=>focus&&!near.has(id)?.34:1;
+
+      /* ③ 배경 */
+      ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cw,ch);
+      const bg=ctx.createRadialGradient(cw*.5,ch*.42,20,cw*.5,ch*.42,Math.max(cw,ch)*.78);
+      bg.addColorStop(0,'#16283C');bg.addColorStop(.55,'#0F1C2B');bg.addColorStop(1,'#080E16');
+      ctx.fillStyle=bg;ctx.fillRect(0,0,cw,ch);
+
+      /* ④ 간선 — 먼 것부터 */
+      const el=ES.map(e=>({e,a:sc[e.from],b:sc[e.to]})).filter(o=>o.a&&o.b).sort((p,q)=>(q.a.z+q.b.z)-(p.a.z+p.b.z));
+      ctx.lineCap='round';
+      el.forEach(({e,a,b})=>{
+        const hot=focus&&(e.from===focus||e.to===focus);
+        const al=Math.min(a.a,b.a)*(hot?.95:focus?.12:.42);
+        const ca=G3.color[(R.current.notes.find(n=>n.id===e.from)||{}).scope||'work'];
+        const cb=G3.color[(R.current.notes.find(n=>n.id===e.to)||{}).scope||'work'];
+        const g=ctx.createLinearGradient(a.x,a.y,b.x,b.y);
+        g.addColorStop(0,gRgba(hot?G3.sel:ca,al));g.addColorStop(1,gRgba(hot?G3.sel:cb,al));
+        ctx.strokeStyle=g;ctx.lineWidth=hot?2:1.1;
+        if(hot){ctx.shadowColor=gRgba(G3.sel,.6);ctx.shadowBlur=8;}
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.shadowBlur=0;
         /* 방향 화살표 */
-        const ang=Math.atan2(b.y-a.y,b.x-a.x);const r=7+(deg[e.to]||0)*1.6;const ex=b.x-Math.cos(ang)*r,ey=b.y-Math.sin(ang)*r;
-        ctx.fillStyle=hl?'#4E82AE':'#C4C4C0';ctx.beginPath();
-        ctx.moveTo(ex,ey);ctx.lineTo(ex-Math.cos(ang-0.4)*7/k,ey-Math.sin(ang-0.4)*7/k);ctx.lineTo(ex-Math.cos(ang+0.4)*7/k,ey-Math.sin(ang+0.4)*7/k);ctx.closePath();ctx.fill();});
+        const ang=Math.atan2(b.y-a.y,b.x-a.x),ex=b.x-Math.cos(ang)*(b.r+2),ey=b.y-Math.sin(ang)*(b.r+2),s=hot?7:5.5;
+        ctx.fillStyle=gRgba(hot?G3.sel:cb,al*1.2);ctx.beginPath();ctx.moveTo(ex,ey);
+        ctx.lineTo(ex-Math.cos(ang-.42)*s,ey-Math.sin(ang-.42)*s);ctx.lineTo(ex-Math.cos(ang+.42)*s,ey-Math.sin(ang+.42)*s);
+        ctx.closePath();ctx.fill();});
       /* 연결 중 안내선 */
-      if(S.current.mode==='link'&&S.current.from){const a=P.current[S.current.from];const mx=(S.current.mx-tx)/k,my=(S.current.my-ty)/k;
-        ctx.strokeStyle='#244A70';ctx.lineWidth=1.6/k;ctx.setLineDash([5/k,4/k]);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(mx,my);ctx.stroke();ctx.setLineDash([]);}
-      /* 노드 */
-      notes.forEach(n=>{const p=P.current[n.id];if(!p)return;const r=7+(deg[n.id]||0)*1.6;
-        ctx.beginPath();ctx.arc(p.x,p.y,r,0,7);
-        ctx.fillStyle=n.id===sel?'#244A70':SCOPE_COLOR[n.scope||'work'];ctx.fill();
-        if(p.fx!=null){ctx.strokeStyle='#37352F';ctx.lineWidth=1.4/k;ctx.stroke();}
-        ctx.fillStyle='#37352F';ctx.font=(n.id===sel?'600 ':'')+(12/Math.max(k,.7))+'px "Noto Sans KR",sans-serif';ctx.textAlign='center';
-        ctx.fillText(n.title.length>18?n.title.slice(0,17)+'…':n.title,p.x,p.y+r+13/Math.max(k,.7));});
+      if(S.current.mode==='link'&&S.current.from&&sc[S.current.from]){const a=sc[S.current.from];
+        ctx.strokeStyle=gRgba(G3.sel,.9);ctx.lineWidth=1.8;ctx.setLineDash([6,5]);
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(S.current.mx,S.current.my);ctx.stroke();ctx.setLineDash([]);}
+
+      /* ⑤ 노드 — 먼 것부터 그려 앞의 것이 위로 오게 */
+      const nl=NS.map(n=>({n,s:sc[n.id]})).filter(o=>o.s).sort((p,q)=>q.s.z-p.s.z);
+      nl.forEach(({n,s})=>{
+        const on=n.id===SEL,hv=n.id===HV;const col=on?G3.sel:G3.color[n.scope||'work'];
+        const a=s.a*dim(n.id);const r=s.r*(on?1.25:1);
+        if(on||hv){ /* 빛무리 */
+          const hg=ctx.createRadialGradient(s.x,s.y,r*.6,s.x,s.y,r*3.2);
+          hg.addColorStop(0,gRgba(col,.34));hg.addColorStop(1,gRgba(col,0));
+          ctx.fillStyle=hg;ctx.beginPath();ctx.arc(s.x,s.y,r*3.2,0,7);ctx.fill();}
+        ctx.globalAlpha=a;
+        if(on||hv){ctx.shadowColor=gRgba(col,.9);ctx.shadowBlur=16;}
+        const g=ctx.createRadialGradient(s.x-r*.38,s.y-r*.42,r*.12,s.x,s.y,r*1.05);
+        g.addColorStop(0,gTint(col,.62));g.addColorStop(.5,col);g.addColorStop(1,gTint(col,-.42));
+        ctx.fillStyle=g;ctx.beginPath();ctx.arc(s.x,s.y,r,0,7);ctx.fill();ctx.shadowBlur=0;
+        const p=P.current[n.id];
+        if(p&&p.fx!=null){ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=1.3;ctx.setLineDash([3,3]);
+          ctx.beginPath();ctx.arc(s.x,s.y,r+3.5,0,7);ctx.stroke();ctx.setLineDash([]);}
+        /* 이름 — 가깝거나 연결이 있거나 고른 노드만 */
+        /* 이름표 — 다 그리면 뒤엉키므로 가까운 것·연결이 많은 것·고른 것만 */
+        if(on||hv||(focus&&near.has(n.id))||NS.length<=16||s.a>.72||(DG[n.id]||0)>=4){
+          const fs=Math.max(10,Math.min(15,12.5*s.k));
+          ctx.font=(on?'600 ':'')+fs+'px "Noto Sans KR",var(--font-sans),sans-serif';ctx.textAlign='center';
+          ctx.shadowColor='rgba(0,0,0,.9)';ctx.shadowBlur=5;
+          ctx.fillStyle=on?'rgba(255,231,180,'+a+')':'rgba(223,233,243,'+(a*.92)+')';
+          const t=n.title.length>18?n.title.slice(0,17)+'…':n.title;
+          ctx.fillText(t,s.x,s.y+r+fs+2);ctx.shadowBlur=0;}
+        ctx.globalAlpha=1;});
       raf=requestAnimationFrame(step);
     };
     step();
-    const ro=new ResizeObserver(()=>{W();H();});ro.observe(cv);
-    return ()=>{cancelAnimationFrame(raf);ro.disconnect();};
-  },[dataKey,sel,tick]);
+    const ro=new ResizeObserver(size);ro.observe(cv);
+    /* 휠 확대는 passive가 아닌 리스너로 붙여야 페이지가 같이 스크롤되지 않는다 */
+    const wheel=ev=>{ev.preventDefault();
+      CAM.current.dist=Math.max(G3.minDist,Math.min(G3.maxDist,CAM.current.dist*(ev.deltaY<0?1/1.12:1.12)));};
+    cv.addEventListener('wheel',wheel,{passive:false});
+    return ()=>{cancelAnimationFrame(raf);ro.disconnect();cv.removeEventListener('wheel',wheel);};
+  },[dataKey]);
 
-  const toWorld=(cx,cy)=>{const {x,y,k}=V.current;return [(cx-x)/k,(cy-y)/k];};
-  const hitNode=(cx,cy)=>{const [wx,wy]=toWorld(cx,cy);let best=null,bd=1e9;
-    notes.forEach(n=>{const p=P.current[n.id];if(!p)return;const r=7+(deg[n.id]||0)*1.6+6;const d=Math.hypot(p.x-wx,p.y-wy);if(d<r&&d<bd){bd=d;best=n.id;}});return best;};
-  const hitEdge=(cx,cy)=>{const [wx,wy]=toWorld(cx,cy);let best=null,bd=8/V.current.k;
-    edges.forEach(e=>{const a=P.current[e.from],b=P.current[e.to];if(!a||!b)return;
-      const dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy||1;let t=((wx-a.x)*dx+(wy-a.y)*dy)/L2;t=Math.max(.15,Math.min(.85,t));
-      const px=a.x+t*dx,py=a.y+t*dy;const d=Math.hypot(px-wx,py-wy);if(d<bd){bd=d;best=e;}});return best;};
+  /* ── 마우스 ── */
   const pos=ev=>{const r=cvRef.current.getBoundingClientRect();return [ev.clientX-r.left,ev.clientY-r.top];};
+  const hitNode=(cx,cy)=>{let best=null,bd=1e9;
+    Object.entries(SCR.current).forEach(([id,s])=>{const d=Math.hypot(s.x-cx,s.y-cy);if(d<s.r+7&&d<bd){bd=d;best=id;}});return best;};
+  const hitEdge=(cx,cy)=>{let best=null,bd=8;
+    edges.forEach(e=>{const a=SCR.current[e.from],b=SCR.current[e.to];if(!a||!b)return;
+      const dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy||1;let t=((cx-a.x)*dx+(cy-a.y)*dy)/L2;t=Math.max(.2,Math.min(.8,t));
+      const d=Math.hypot(a.x+t*dx-cx,a.y+t*dy-cy);if(d<bd){bd=d;best=e;}});return best;};
+  /* 화면에서 끈 만큼을 카메라가 보는 평면 위의 3차원 이동으로 바꾼다 */
+  const dragTo3D=(dx,dy,k)=>{const {yaw,pitch}=CAM.current;
+    const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+    const rx=[cy,0,-sy],uy=[-sp*sy,cp,-sp*cy];
+    return [ (rx[0]*dx+uy[0]*dy)/k, (rx[1]*dx+uy[1]*dy)/k, (rx[2]*dx+uy[2]*dy)/k ];};
 
-  const onDown=ev=>{const [cx,cy]=pos(ev);const id=hitNode(cx,cy);S.current.moved=false;S.current.mx=cx;S.current.my=cy;
+  const onDown=ev=>{const [cx,cy]=pos(ev);const id=hitNode(cx,cy);
+    S.current.moved=false;S.current.mx=cx;S.current.my=cy;
     if(id&&ev.shiftKey){S.current.mode='link';S.current.from=id;setHint('연결할 노트 위에서 놓으세요');return;}
-    if(id){S.current.mode='node';S.current.node=id;const p=P.current[id];p.fx=p.x;p.fy=p.y;return;}
-    S.current.mode='pan';};
-  const onMove=ev=>{if(!S.current.mode)return;const [cx,cy]=pos(ev);const dx=cx-S.current.mx,dy=cy-S.current.my;
+    if(id){S.current.mode='node';S.current.node=id;const p=P.current[id];p.fx=p.x;p.fy=p.y;p.fz=p.z;return;}
+    S.current.mode=ev.shiftKey?'pan':'orbit';};
+  const onMove=ev=>{const [cx,cy]=pos(ev);const m=S.current.mode;
+    if(!m){const id=hitNode(cx,cy);R.current.hover=id;
+      cvRef.current.style.cursor=id?'pointer':(hitEdge(cx,cy)?'crosshair':'grab');return;}
+    const dx=cx-S.current.mx,dy=cy-S.current.my;
     if(Math.abs(dx)>2||Math.abs(dy)>2)S.current.moved=true;
-    if(S.current.mode==='node'){const p=P.current[S.current.node];p.fx+=dx/V.current.k;p.fy+=dy/V.current.k;}
-    else if(S.current.mode==='pan'){V.current.x+=dx;V.current.y+=dy;}
+    if(m==='node'){const p=P.current[S.current.node];const s=SCR.current[S.current.node];
+      const [wx,wy,wz]=dragTo3D(dx,dy,(s&&s.k)||1);p.fx+=wx;p.fy+=wy;p.fz+=wz;A.current=Math.max(A.current,.06);}
+    else if(m==='pan'){CAM.current.px+=dx;CAM.current.py+=dy;}
+    else if(m==='orbit'){CAM.current.yaw+=dx*0.006;
+      CAM.current.pitch=Math.max(-1.45,Math.min(1.45,CAM.current.pitch+dy*0.006));if(flat)setFlat(false);}
     S.current.mx=cx;S.current.my=cy;};
   const onUp=ev=>{const m=S.current.mode;const [cx,cy]=pos(ev);
     if(m==='link'){const to=hitNode(cx,cy);if(to&&to!==S.current.from)onLink(S.current.from,to);setHint('');}
-    else if(m==='node'&&!S.current.moved){onPick(S.current.node);}
-    else if(m==='pan'&&!S.current.moved){const e=hitEdge(cx,cy);
+    else if(m==='node'&&!S.current.moved){const p=P.current[S.current.node];if(p){p.fx=p.fy=p.fz=null;}onPick(S.current.node);}
+    else if(m==='orbit'&&!S.current.moved){const e=hitEdge(cx,cy);
       if(e){const a=notes.find(n=>n.id===e.from),b=notes.find(n=>n.id===e.to);
         if(window.confirm('연결을 끊을까요?\n\n'+a.title+' → '+b.title))onUnlink(e.from,e.to);}}
     S.current.mode=null;S.current.node=null;S.current.from=null;setTick(t=>t+1);};
-  const onWheel=ev=>{ev.preventDefault();const [cx,cy]=pos(ev);const {x,y,k}=V.current;
-    const nk=Math.max(.35,Math.min(2.6,k*(ev.deltaY<0?1.12:1/1.12)));
-    V.current={k:nk,x:cx-(cx-x)*nk/k,y:cy-(cy-y)*nk/k};};
-  const reset=()=>{Object.values(P.current).forEach(p=>{p.fx=null;p.fy=null;});V.current={x:0,y:0,k:1};setTick(t=>t+1);};
+  const onDbl=ev=>{const [cx,cy]=pos(ev);const id=hitNode(cx,cy);if(id)onOpen(id);};
+  const reset=()=>{Object.values(P.current).forEach(p=>{p.fx=p.fy=p.fz=null;});
+    CAM.current={yaw:.55,pitch:flat?0:-.3,dist:980,px:0,py:0};A.current=1;FIT.current=true;setTick(t=>t+1);};
 
-  return <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 330px',gap:10,alignItems:'stretch'}}>
+  const ov={position:'absolute',zIndex:2,display:'flex',gap:6,alignItems:'center'};
+  return <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 5px '+gw+'px',alignItems:'stretch'}}>
     <div>
-      <canvas ref={cvRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
-        style={{width:'100%',height:560,border:'1px solid var(--border-default)',background:'var(--surface-drop)',cursor:S.current.mode==='pan'?'grabbing':'default',display:'block'}}/>
-      <div style={{display:'flex',alignItems:'center',gap:10,fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,flexWrap:'wrap'}}>
-        <span><span style={{color:SCOPE_COLOR.work}}>●</span> 업무 · <span style={{color:SCOPE_COLOR.personal}}>●</span> 개인 · 원 크기 = 연결 수</span>
-        <span>드래그 = 위치 고정 · <b>Shift+드래그 = 연결</b> · 선 클릭 = 연결 해제 · 휠 = 확대 · 배경 드래그 = 이동</span>
-        {hint&&<b style={{color:'var(--color-accent)'}}>{hint}</b>}
-        <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={reset}>배치 초기화</Button>
+      <div style={{position:'relative',border:'1px solid #1C2C3E',borderRadius:8,overflow:'hidden',background:'#0C1622'}}>
+        <canvas ref={cvRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+          onDoubleClick={onDbl}
+          style={{width:'100%',height:600,display:'block',cursor:'grab'}}/>
+        <div style={{...ov,left:12,top:11,gap:10,color:'rgba(226,236,245,.62)',font:'500 11.5px var(--font-sans)',pointerEvents:'none'}}>
+          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(226,236,245,.9)'}}>{notes.length}</span> 노트
+          <span style={{opacity:.4}}>·</span>
+          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(226,236,245,.9)'}}>{edges.length}</span> 연결
+        </div>
+        <div style={{...ov,right:10,top:10}}>
+          <GBtn on={!flat} title="입체로 보기 / 평면으로 눕히기" onClick={()=>{setFlat(f=>{const nf=!f;if(nf)A.current=Math.max(A.current,.35);return nf;});}}>{flat?'▦ 평면':'◈ 입체'}</GBtn>
+          <GBtn on={auto} title="천천히 자동 회전" onClick={()=>setAuto(a=>!a)}>↻ 회전</GBtn>
+          <GBtn title="고정 해제 · 처음 배치로" onClick={reset}>⟲ 초기화</GBtn>
+        </div>
+        <div style={{...ov,left:12,bottom:11,gap:12,color:'rgba(226,236,245,.55)',font:'500 11px var(--font-sans)',pointerEvents:'none'}}>
+          <span><span style={{color:G3.color.work}}>●</span> 업무</span>
+          <span><span style={{color:G3.color.personal}}>●</span> 개인</span>
+          <span style={{opacity:.75}}>공 크기 = 연결 수</span>
+          {hint&&<b style={{color:G3.sel}}>{hint}</b>}
+        </div>
+      </div>
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6}}>
+        배경 드래그 = 회전 · 휠 = 확대 · Shift+배경 드래그 = 이동 · 노드 드래그 = 위치 고정(점선 테두리) · <b>Shift+노드 드래그 = 연결</b> · 선 클릭 = 연결 해제 · 노드 더블클릭 = 노트 열기
       </div>
     </div>
-    <div style={{border:'1px solid var(--border-default)',padding:'12px 14px',overflowY:'auto',maxHeight:590,background:'#fff'}}>
+    <Splitter onDrag={dx=>setGw(w=>Math.max(260,Math.min(700,w-dx)))} onReset={resetGw}/>
+    <div style={{border:'1px solid var(--border-default)',padding:'12px 14px',overflowY:'auto',maxHeight:640,background:'#fff',minWidth:0}}>
       {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,fontSize:'var(--fs-base)'}}>노드를 클릭하면 노트가 여기에 열립니다</div>
       :<><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8,paddingBottom:8,borderBottom:'1px solid var(--border-default)'}}>
-          <span style={{color:SCOPE_COLOR[cur.scope||'work'],fontSize:'var(--fs-sm)'}}>● {SCOPE_LABEL[cur.scope||'work']}</span>
+          <b style={{fontSize:'var(--fs-md)',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cur.title}</b>
+          <span style={{color:SCOPE_COLOR[cur.scope||'work'],fontSize:'var(--fs-sm)',whiteSpace:'nowrap'}}>● {SCOPE_LABEL[cur.scope||'work']}</span>
           <span style={{marginLeft:'auto'}}><Button variant="gray" size="xs" onClick={()=>onOpen(cur.id)}>노트에서 열기</Button></span></div>
         <div style={{fontSize:'var(--fs-sm)'}}><Markdown md={splitRaw(cur.md)[0]} onWiki={onWiki}/></div>
         <div style={{marginTop:12,paddingTop:8,borderTop:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>
@@ -36865,7 +37008,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v2.2';
+const APP_VERSION='v2.3';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
