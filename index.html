@@ -36109,18 +36109,27 @@ function rtfToText(rtf){
   if(/\\fromhtml|<\/?(p|div|br|span|table)\b/i.test(rtf.slice(0,400))||/<[a-z]+[^>]*>/i.test(t))t=Gmail.stripHtml(t);
   return t.replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();}
 function parseMsg(buf){if(!window.MsgReader)throw new Error('.msg 파서가 로드되지 않았습니다');
-  let d=new MsgReader(buf).getFileData();
-  const cp=d.messageCodepage||d.internetCodepage;
-  if(cp&&cp!==1200&&cp!==65001){try{d=new MsgReader(buf,{ansiEncoding:CP_NAMES[cp]||('cp'+cp)}).getFileData();}catch(_){}}
+  /* 1차: 코드페이지와 전체 속성 목록 파악 */
+  const read=(enc)=>{const r=new MsgReader(buf);const raw={},tags=[];
+    r.parserConfig={ansiEncoding:enc||undefined,propertyObserver:(f,tag,arr)=>{const t=tag.toString(16).padStart(8,'0');if(f.dataType==='msg'||f.dataType===undefined){tags.push(t+(arr?'('+arr.length+')':''));if(/^(1000|1013|1009|1035|007d)/.test(t)&&arr&&arr.length>8&&!raw[t])raw[t]=arr;}}};
+    const d=r.getFileData();return {d,raw,tags};};
+  let {d,raw,tags}=read();
+  const cp=d.messageCodepage||d.internetCodepage;const enc=cp&&cp!==1200&&cp!==65001?(CP_NAMES[cp]||('cp'+cp)):null;
+  if(enc){try{({d,raw,tags}=read(enc));}catch(_){}}
   const name=(n,e)=>n&&e&&n!==e?n+' <'+e+'>':(e||n||'');
   const from=name(d.senderName,d.senderSmtpAddress||d.senderEmail);
   const rc=(d.recipients||[]);const isCc=r=>r.recipType==='cc'||r.recipType===2;const list=f=>rc.filter(f).map(r=>name(r.name,r.smtpAddress||r.email)).filter(Boolean).join(', ');
   const to=list(r=>!isCc(r)),cc=list(isCc);
-  let body=(d.body||'').trim(),src='body';
-  if(!body&&d.bodyHtml){body=Gmail.stripHtml(d.bodyHtml);src='bodyHtml';}
-  if(!body&&d.html&&d.html.length){body=Gmail.stripHtml(decodeBytes(d.html,CP_NAMES[d.internetCodepage]||'utf-8'));src='html';}
-  if(!body&&d.compressedRtf&&d.compressedRtf.length&&window.decompressRTF){try{const bytes=decompressRTF(Array.from(d.compressedRtf));const rtf=String.fromCharCode.apply(null,bytes.length<200000?bytes:bytes.slice(0,200000));body=rtfToText(rtf);src='rtf';}catch(e){console.warn('rtf',e);src='rtf-error:'+e.message;}}
-  if(!body)body='(본문 없음 · 파서 진단: '+['body','bodyHtml','html','compressedRtf'].map(k=>k+'='+(d[k]?(d[k].length||1):0)).join(' ')+' · 마지막 시도 '+src+')';
+  const ansi=enc||'utf-8';const u16=a=>new TextDecoder('utf-16le').decode(a).replace(/\0+$/,'');const an=a=>decodeBytes(a,ansi).replace(/\0+$/,'');
+  /* 본문 후보를 직접 디코드: 텍스트(유니코드/ANSI) → HTML(유니코드/ANSI/바이너리) → 압축 RTF */
+  let body='',src='';
+  const tryStr=(tag,fn,label)=>{if(body||!raw[tag])return;try{const t=fn(raw[tag]).trim();if(t){body=t;src=label;}}catch(e){src=label+'-err';}};
+  tryStr('1000001f',u16,'text/unicode');tryStr('1000001e',an,'text/ansi');
+  tryStr('1013001f',a=>Gmail.stripHtml(u16(a)),'html/unicode');tryStr('1013001e',a=>Gmail.stripHtml(an(a)),'html/ansi');
+  tryStr('10130102',a=>Gmail.stripHtml(decodeBytes(a,CP_NAMES[d.internetCodepage]||ansi)),'html/bin');
+  if(!body&&raw['10090102']&&window.decompressRTF){try{const bytes=decompressRTF(Array.from(raw['10090102']));const rtf=String.fromCharCode.apply(null,bytes.length<300000?bytes:bytes.slice(0,300000));body=rtfToText(rtf);src='rtf';}catch(e){src='rtf-err:'+e.message;}}
+  if(!body&&d.body)body=d.body.trim(),src='lib';
+  if(!body)body='(본문 없음 · 파서 진단 v2: 속성 '+tags.filter(t=>!/^(0037|0c1a|0c1f|0e04|0e03|3001|39fe|0e1d|0070|1035|300b|0e07|0039|0e06|3fde|3ffd)/.test(t)).join(' ')+' · 코드페이지 '+(cp||'-')+' · 시도 '+(src||'-')+')';
   const dt=new Date(d.messageDeliveryTime||d.clientSubmitTime||d.lastModificationTime||'');
   return {from,to,cc,subject:d.subject||d.normalizedSubject||'(제목 없음)',date:isNaN(dt)?nowStamp():dt.toISOString(),body:body.replace(/\r\n/g,'\n').trim(),attachments:(d.attachments||[]).filter(a=>!a.attachmentHidden).map(a=>a.fileName||a.fileNameShort).filter(Boolean)};}
 function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
