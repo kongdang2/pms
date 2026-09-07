@@ -5,6 +5,7 @@
 window.PMS_CONFIG = {
   supabaseUrl: "https://vowvnkxqzmizicvubipy.supabase.co",
   supabaseKey: "sb_publishable_oAaEyETDjrhxXu8VcWeCBw_BBjeeRwf",
+  gmailClientId: "692264491154-489bldnc50p9rjhanpj15d5195uvvh1v.apps.googleusercontent.com",
   claudeVia: "edge",              // Claude 호출: "edge"(Supabase Edge Function 경유) 또는 "direct"
   claudeModel: "claude-sonnet-5"  // 기본 모델
 };
