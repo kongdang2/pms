@@ -36153,9 +36153,12 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
         toast(added.length?`✓ ${added.length}건 새로 가져옴 · ${skipped}건은 이미 있음`:'새 메일 없음');}}
     catch(e){toast('⚠ 동기화 실패: '+explainGmailError(e));}
     setBusy('');};
-  const importMails=(items,acc)=>{const key=m=>(m.subject||'')+'|'+(m.date||'').slice(0,16)+'|'+(m.from||'');const have=new Set(db.mails.map(key));
-    const fresh=items.filter(p=>!have.has(key(p)));const ms=fresh.map(p=>({id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p}));
-    if(ms.length)setDb('mails',[...ms,...db.mails]);set({importOpen:false});toast(ms.length+'건 가져옴'+(items.length-ms.length?' · '+(items.length-ms.length)+'건은 이미 있음':'')+' · '+accOf(acc).label);};
+  const importMails=(items,acc)=>{const key=m=>(m.subject||'')+'|'+(m.date||'').slice(0,16)+'|'+(m.from||'');const have=new Map(db.mails.map(m=>[key(m),m]));
+    const fresh=[],refill=[];items.forEach(p=>{const ex=have.get(key(p));if(!ex)fresh.push(p);else if((!ex.body||/^\(본문 없음/.test(ex.body))&&p.body&&!/^\(본문 없음/.test(p.body))refill.push([ex.id,p]);});
+    const ms=fresh.map(p=>({id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p}));
+    let mails=db.mails;if(refill.length){const rm=new Map(refill);mails=mails.map(m=>rm.has(m.id)?{...m,body:rm.get(m.id).body,attachments:rm.get(m.id).attachments||m.attachments}:m);}
+    if(ms.length||refill.length)setDb('mails',[...ms,...mails]);set({importOpen:false});
+    const dup=items.length-ms.length-refill.length;toast(ms.length+'건 가져옴'+(refill.length?' · '+refill.length+'건 본문 채움':'')+(dup?' · '+dup+'건은 이미 있음':'')+' · '+accOf(acc).label);};
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
