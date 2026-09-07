@@ -35961,7 +35961,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">v1.0</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v1.6'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36163,7 +36163,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
     catch(e){toast('⚠ 동기화 실패: '+explainGmailError(e));}
     setBusy('');};
   const importMails=(items,acc)=>{const key=m=>(m.subject||'')+'|'+(m.date||'').slice(0,16)+'|'+(m.from||'');const have=new Map(db.mails.map(m=>[key(m),m]));
-    const fresh=[],refill=[];items.forEach(p=>{const ex=have.get(key(p));if(!ex)fresh.push(p);else if((!ex.body||/^\(본문 없음/.test(ex.body))&&p.body&&!/^\(본문 없음/.test(p.body))refill.push([ex.id,p]);});
+    const fresh=[],refill=[];items.forEach(p=>{const ex=have.get(key(p));if(!ex)fresh.push(p);else if((!ex.body||/^\(본문 없음/.test(ex.body))&&p.body&&p.body!==ex.body)refill.push([ex.id,p]);});
     const ms=fresh.map(p=>({id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p}));
     let mails=db.mails;if(refill.length){const rm=new Map(refill);mails=mails.map(m=>rm.has(m.id)?{...m,body:rm.get(m.id).body,attachments:rm.get(m.id).attachments||m.attachments}:m);}
     if(ms.length||refill.length)setDb('mails',[...ms,...mails]);set({importOpen:false});
@@ -36507,6 +36507,7 @@ function GraphView({notes,sel,onPick}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
+const APP_VERSION='v1.6';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
@@ -36534,7 +36535,7 @@ function Shell({user,onLogout}){
   const unread=db.mails.filter(m=>m.folder==='inbox'&&!m.read).length;const todayN=expandEvents(db.events,todayISO(),todayISO()).length;
   const savedBadge=saved==='saving'?'⏳ 저장 중…':saved==='error'?'⚠ 저장 실패':saved?'✓ 자동저장됨 · '+saved:'✓ 불러옴';
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
-    <AppHeader mark="🗂" title="개인 업무 관리" version="v1.0" tools={<><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
+    <AppHeader mark="🗂" title="개인 업무 관리" version={APP_VERSION} tools={<><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
     <SessionBar icon="🗂" name={user.name+' 워크스페이스'} right={<ZoneSegment items={ZONES.map(z=>({...z,label:z.label+(z.id==='mail'&&unread?' · '+unread:z.id==='cal'&&todayN?' · '+todayN:'')}))} value={zone} onChange={setZone}/>}>
       <Badge tone="pill">{savedBadge}</Badge><SessionDivider/>
       {Store.mode==='supabase'?<Badge tone="linked">☁ Supabase · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill" style={{cursor:'pointer'}} onClick={()=>setCfg(true)}>💾 로컬 저장 · 클릭해 클라우드 연결</Badge>}
@@ -36552,7 +36553,7 @@ function Shell({user,onLogout}){
     <Toast open={!!toastMsg}>{toastMsg}</Toast>
   </div>;
 }
-Object.assign(window,{PmsApp});
+Object.assign(window,{PmsApp,APP_VERSION});
 </script>
 <script type="text/babel">ReactDOM.createRoot(document.getElementById('root')).render(<PmsApp/>);</script>
 </body></html>
