@@ -35685,8 +35685,8 @@ function seedData(){
   const d=n=>shiftDay(t,n);
   return {
     accounts:[
-      {id:'work',label:'회사 (Outlook)',provider:'outlook',email:'me@company.co.kr',status:'manual',note:'사내 PC: Outlook 연동 · 외부: 수동 가져오기'},
-      {id:'personal',label:'개인 (Gmail)',provider:'gmail',email:'me@gmail.com',status:'ready',note:'Gmail API OAuth — Client ID 입력 후 연결'}
+      {id:'work',label:'회사',provider:'outlook',email:'me@company.co.kr',status:'manual',note:'사내 PC: Outlook 연동 · 외부: 수동 가져오기'},
+      {id:'personal',label:'개인',provider:'gmail',email:'me@gmail.com',status:'ready',note:'Gmail API OAuth — Client ID 입력 후 연결'}
     ],
     mails:[
       {id:uid(),acc:'work',folder:'inbox',from:'김부장 <kim@company.co.kr>',to:'me@company.co.kr',subject:'9월 손익추정 검토 요청',date:t+'T09:12:00',body:'9월 추정 자료 검토 부탁합니다.\n\n- 기준가격 반영 여부\n- 판매정보 업데이트\n\n금요일 오전 회의 전까지 회신 주세요.',star:true,read:false,tags:['손익추정']},
@@ -35696,23 +35696,30 @@ function seedData(){
       {id:uid(),acc:'work',folder:'sent',from:'me@company.co.kr',to:'kim@company.co.kr',subject:'RE: 8월 확정 손익 보고',date:d(-3)+'T17:40:00',body:'8월 확정분 첨부합니다. 차이분석은 별도 보고 예정입니다.',star:false,read:true,tags:['손익추정']}
     ],
     events:[
-      {id:uid(),title:'손익추정 검토 회의',date:t,start:'10:00',end:'11:00',cal:'work',status:'todo',priority:'high',repeat:'none',notes:'김부장 요청 건. [[손익추정 프로세스]] 참고'},
-      {id:uid(),title:'주간 팀 미팅',date:t,start:'14:00',end:'14:30',cal:'work',status:'todo',priority:'mid',repeat:'weekly',notes:''},
-      {id:uid(),title:'9월 기준가격 입력 마감',date:d(2),start:'',end:'',cal:'work',status:'doing',priority:'high',repeat:'none',notes:'MOPJ · 두바이 · 환율'},
-      {id:uid(),title:'북한산 등산',date:d(5),start:'07:00',end:'12:00',cal:'personal',status:'todo',priority:'low',repeat:'none',notes:'우이령 코스'},
-      {id:uid(),title:'카드 결제일',date:y+'-'+m+'-25',start:'',end:'',cal:'personal',status:'todo',priority:'mid',repeat:'monthly',notes:''},
-      {id:uid(),title:'8월 차이분석 보고서',date:d(-2),start:'',end:'',cal:'work',status:'done',priority:'mid',repeat:'none',notes:''}
+      {id:uid(),title:'손익추정 검토 회의',date:t,start:'10:00',end:'11:00',cal:'work',status:'todo',category:'손익추정',milestones:[],repeat:'none',notes:'김부장 요청 건. [[손익추정 프로세스]] 참고'},
+      {id:uid(),title:'주간 팀 미팅',date:t,start:'14:00',end:'14:30',cal:'work',status:'todo',category:'정기회의',milestones:[],repeat:'weekly',notes:''},
+      {id:uid(),title:'9월 기준가격 입력 마감',date:d(2),start:'',end:'',cal:'work',status:'doing',category:'손익추정',milestones:[{id:uid(),date:d(1),title:'시황 자료 취합'},{id:uid(),date:d(2),title:'기준가격 확정'}],repeat:'none',notes:'MOPJ · 두바이 · 환율'},
+      {id:uid(),title:'북한산 등산',date:d(5),start:'07:00',end:'12:00',cal:'personal',status:'todo',category:'취미',milestones:[],repeat:'none',notes:'우이령 코스'},
+      {id:uid(),title:'카드 결제일',date:y+'-'+m+'-25',start:'',end:'',cal:'personal',status:'todo',category:'생활',milestones:[],repeat:'monthly',notes:''},
+      {id:uid(),title:'8월 차이분석 보고서',date:d(-2),start:'',end:'',cal:'work',status:'done',category:'손익추정',milestones:[],repeat:'none',notes:''}
     ],
     notes:[
-      {id:uid(),title:'홈',folder:'',tags:['index'],updated:nowStamp(),md:'# 개인 위키\n\n업무와 비업무 지식을 한 곳에 축적합니다. `[[제목]]`으로 노트를 연결하세요.\n\n## 업무\n- [[손익추정 프로세스]]\n- [[기준가격 산정 메모]]\n\n## 비업무\n- [[등산 코스 정리]]\n\n## 규칙\n- 노트 제목은 명사구\n- 출처가 있으면 하단에 `출처:` 표기\n- 미완성은 `#draft` 태그'},
-      {id:uid(),title:'손익추정 프로세스',folder:'업무',tags:['손익추정','프로세스'],updated:nowStamp(),md:'# 손익추정 프로세스\n\n매월 반복되는 추정 → 확정 → 분석 흐름.\n\n| 단계 | 시점 | 산출물 |\n|---|---|---|\n| 추정 | 월초 | 기준가격·판매·구매 입력 |\n| 확정 | 월말+5일 | 제조원가명세서 |\n| 분석 | 확정 후 | 차이분석 보고 |\n\n- [ ] 9월 기준가격 입력\n- [x] 8월 확정 마감\n\n관련: [[기준가격 산정 메모]]'},
-      {id:uid(),title:'기준가격 산정 메모',folder:'업무',tags:['손익추정','시황'],updated:nowStamp(),md:'# 기준가격 산정 메모\n\n> 유가·납사·환율은 기억이 아니라 **최신 검색**으로 확인한다.\n\n1. 두바이/브렌트 최근 4주 평균\n2. MOPJ 스프레드 반영\n3. 환율은 월평균 예상치\n\n연결: [[손익추정 프로세스]]'},
-      {id:uid(),title:'등산 코스 정리',folder:'개인',tags:['취미'],updated:nowStamp(),md:'# 등산 코스 정리\n\n## 북한산\n- 우이령: 완만, 왕복 3h\n- 백운대: 급경사, 왕복 4h\n\n## 준비물\n- 물 1L, 행동식, 스틱'}
+      {id:uid(),title:'홈',scope:'work',tags:['index'],updated:nowStamp(),md:'# 개인 위키\n\n업무와 비업무 지식을 한 곳에 축적합니다. `[[제목]]`으로 노트를 연결하세요.\n\n## 업무\n- [[손익추정 프로세스]]\n- [[기준가격 산정 메모]]\n\n## 비업무\n- [[등산 코스 정리]]\n\n## 규칙\n- 노트 제목은 명사구\n- 출처가 있으면 하단에 `출처:` 표기\n- 미완성은 `#draft` 태그'},
+      {id:uid(),title:'손익추정 프로세스',scope:'work',tags:['손익추정','프로세스'],updated:nowStamp(),md:'# 손익추정 프로세스\n\n매월 반복되는 추정 → 확정 → 분석 흐름.\n\n| 단계 | 시점 | 산출물 |\n|---|---|---|\n| 추정 | 월초 | 기준가격·판매·구매 입력 |\n| 확정 | 월말+5일 | 제조원가명세서 |\n| 분석 | 확정 후 | 차이분석 보고 |\n\n- [ ] 9월 기준가격 입력\n- [x] 8월 확정 마감\n\n관련: [[기준가격 산정 메모]]'},
+      {id:uid(),title:'기준가격 산정 메모',scope:'work',tags:['손익추정','시황'],updated:nowStamp(),md:'# 기준가격 산정 메모\n\n> 유가·납사·환율은 기억이 아니라 **최신 검색**으로 확인한다.\n\n1. 두바이/브렌트 최근 4주 평균\n2. MOPJ 스프레드 반영\n3. 환율은 월평균 예상치\n\n연결: [[손익추정 프로세스]]'},
+      {id:uid(),title:'등산 코스 정리',scope:'personal',tags:['취미'],updated:nowStamp(),md:'# 등산 코스 정리\n\n## 북한산\n- 우이령: 완만, 왕복 3h\n- 백운대: 급경사, 왕복 4h\n\n## 준비물\n- 물 1L, 행동식, 스틱'}
     ]
   };
 }
 
 const KINDS=['accounts','mails','events','notes'];
+/* 구버전 데이터 보정: 노트 folder→scope, 일정 category/milestones, 계정 라벨 정리 */
+function migrateDb(db){
+  if(Array.isArray(db.notes))db.notes=db.notes.map(n=>n.scope?n:{...n,scope:(n.folder==='개인'||n.folder==='personal')?'personal':'work'});
+  if(Array.isArray(db.events))db.events=db.events.map(e=>({...e,category:e.category||'',milestones:Array.isArray(e.milestones)?e.milestones:[]}));
+  if(Array.isArray(db.accounts))db.accounts=db.accounts.map(a=>({...a,label:(a.label||'').replace(/\s*\((Outlook|Gmail|gmail|outlook)\)\s*$/,'').trim()||a.label}));
+  return db;
+}
 const SB_CDN='https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js';
 /* Supabase 오류를 사람이 읽을 수 있는 한국어로. 단계별 원인 → 조치 */
 function explainSbError(e){
@@ -35778,7 +35785,7 @@ const Store={
     const s=seedData();const missing=KINDS.filter(k=>!Array.isArray(db[k]));
     missing.forEach(k=>db[k]=s[k]);
     if(this.mode==='supabase'&&missing.length)for(const k of missing)await this.persist(k,db[k]);
-    return db;
+    return migrateDb(db);
   },
   async persist(kind,arr){
     if(this.mode==='supabase'){const {error}=await this.sb.from('pms_collections').upsert({user_id:this.user.id,kind,data:arr,updated_at:nowStamp()});if(error)throw new Error(explainSbError(error));}
@@ -35869,12 +35876,17 @@ function Field({label,children,row}){return <label style={{display:row?'flex':'b
 function TextInput(props){const [f,setF]=React.useState(false);return <input {...props} onFocus={e=>{setF(true);props.onFocus&&props.onFocus(e)}} onBlur={e=>{setF(false);props.onBlur&&props.onBlur(e)}} style={{...inputStyle,outline:f?'1px solid var(--color-focus)':'none',...props.style}}/>;}
 function Select({options,value,onChange,style}){return <select value={value} onChange={e=>onChange(e.target.value)} style={{...inputStyle,width:'auto',fontSize:'var(--fs-md2)',padding:'4px 8px',...style}}>{options.map(o=><option key={o.id} value={o.id}>{o.label}</option>)}</select>;}
 function Chip({on,children,onClick,color}){return <button type="button" onClick={onClick} style={{border:'1px solid '+(on?(color||'var(--color-accent)'):'var(--border-default)'),background:on?(color?color+'22':'var(--surface-calc-cell)'):'transparent',color:on?'var(--text-body)':'var(--text-muted)',borderRadius:14,padding:'2px 9px',fontSize:'var(--fs-sm)',fontWeight:500,cursor:'pointer',fontFamily:'inherit'}}>{children}</button>;}
+/* 대한민국 공휴일 2025~2032 (음력 환산 + 대체공휴일 규칙 반영) */
+const HOLIDAYS={"2025-01-01":"신정","2025-01-28":"설날 연휴","2025-01-29":"설날","2025-01-30":"설날 연휴","2025-03-01":"삼일절","2025-03-03":"대체공휴일(삼일절)","2025-05-05":"어린이날","2025-05-06":"대체공휴일(어린이날)","2025-06-06":"현충일","2025-08-15":"광복절","2025-10-03":"개천절","2025-10-05":"추석 연휴","2025-10-06":"추석","2025-10-07":"추석 연휴","2025-10-08":"대체공휴일(추석)","2025-10-09":"한글날","2025-12-25":"성탄절","2026-01-01":"신정","2026-02-16":"설날 연휴","2026-02-17":"설날","2026-02-18":"설날 연휴","2026-03-01":"삼일절","2026-03-02":"대체공휴일(삼일절)","2026-05-05":"어린이날","2026-05-24":"부처님오신날","2026-05-25":"대체공휴일(부처님오신날)","2026-06-06":"현충일","2026-08-15":"광복절","2026-08-17":"대체공휴일(광복절)","2026-09-24":"추석 연휴","2026-09-25":"추석","2026-09-26":"추석 연휴","2026-10-03":"개천절","2026-10-05":"대체공휴일(개천절)","2026-10-09":"한글날","2026-12-25":"성탄절","2027-01-01":"신정","2027-02-06":"설날 연휴","2027-02-07":"설날","2027-02-08":"설날 연휴","2027-02-09":"대체공휴일(설날)","2027-03-01":"삼일절","2027-05-05":"어린이날","2027-05-13":"부처님오신날","2027-06-06":"현충일","2027-08-15":"광복절","2027-08-16":"대체공휴일(광복절)","2027-09-14":"추석 연휴","2027-09-15":"추석","2027-09-16":"추석 연휴","2027-10-03":"개천절","2027-10-04":"대체공휴일(개천절)","2027-10-09":"한글날","2027-10-11":"대체공휴일(한글날)","2027-12-25":"성탄절","2027-12-27":"대체공휴일(성탄절)","2028-01-01":"신정","2028-01-26":"설날 연휴","2028-01-27":"설날","2028-01-28":"설날 연휴","2028-03-01":"삼일절","2028-05-02":"부처님오신날","2028-05-05":"어린이날","2028-06-06":"현충일","2028-08-15":"광복절","2028-10-02":"추석 연휴","2028-10-03":"추석","2028-10-04":"추석 연휴","2028-10-05":"대체공휴일(추석)","2028-10-09":"한글날","2028-12-25":"성탄절","2029-01-01":"신정","2029-02-12":"설날 연휴","2029-02-13":"설날","2029-02-14":"설날 연휴","2029-03-01":"삼일절","2029-05-05":"어린이날","2029-05-07":"대체공휴일(어린이날)","2029-05-20":"부처님오신날","2029-05-21":"대체공휴일(부처님오신날)","2029-06-06":"현충일","2029-08-15":"광복절","2029-09-21":"추석 연휴","2029-09-22":"추석","2029-09-23":"추석 연휴","2029-09-24":"대체공휴일(추석)","2029-10-03":"개천절","2029-10-09":"한글날","2029-12-25":"성탄절","2030-01-01":"신정","2030-02-02":"설날 연휴","2030-02-03":"설날","2030-02-04":"설날 연휴","2030-02-05":"대체공휴일(설날)","2030-03-01":"삼일절","2030-05-05":"어린이날","2030-05-06":"대체공휴일(어린이날)","2030-05-09":"부처님오신날","2030-06-06":"현충일","2030-08-15":"광복절","2030-09-11":"추석 연휴","2030-09-12":"추석","2030-09-13":"추석 연휴","2030-10-03":"개천절","2030-10-09":"한글날","2030-12-25":"성탄절","2031-01-01":"신정","2031-01-22":"설날 연휴","2031-01-23":"설날","2031-01-24":"설날 연휴","2031-03-01":"삼일절","2031-03-03":"대체공휴일(삼일절)","2031-05-05":"어린이날","2031-05-28":"부처님오신날","2031-06-06":"현충일","2031-08-15":"광복절","2031-09-30":"추석 연휴","2031-10-01":"추석","2031-10-02":"추석 연휴","2031-10-03":"개천절","2031-10-09":"한글날","2031-12-25":"성탄절","2032-01-01":"신정","2032-02-10":"설날 연휴","2032-02-11":"설날","2032-02-12":"설날 연휴","2032-03-01":"삼일절","2032-05-05":"어린이날","2032-05-16":"부처님오신날","2032-05-17":"대체공휴일(부처님오신날)","2032-06-06":"현충일","2032-08-15":"광복절","2032-08-16":"대체공휴일(광복절)","2032-09-18":"추석 연휴","2032-09-19":"추석","2032-09-20":"추석 연휴","2032-09-21":"대체공휴일(추석)","2032-10-03":"개천절","2032-10-04":"대체공휴일(개천절)","2032-10-09":"한글날","2032-10-11":"대체공휴일(한글날)","2032-12-25":"성탄절","2032-12-27":"대체공휴일(성탄절)"};
+const holidayOf=iso=>HOLIDAYS[iso]||'';
+const isRestDay=iso=>{const d=new Date(iso+'T00:00:00');return d.getDay()===0||d.getDay()===6||!!HOLIDAYS[iso];};
 const CAL_COLOR={work:'#4E82AE',personal:'#0a6b3b'};
 const CAL_LABEL={work:'회사',personal:'개인'};
-const STATUS_LABEL={todo:'할 일',doing:'진행',done:'완료'};
+const STATUS_LABEL={todo:'예정',doing:'진행중',done:'완료'};
+const STATUS_KEYS=['todo','doing','done'];
 const PRI_LABEL={high:'높음',mid:'보통',low:'낮음'};
 const fmtDT=iso=>{const d=new Date(iso);return isNaN(d)?iso:d.getMonth()+1+'/'+d.getDate()+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());};
-Object.assign(window,{Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
+Object.assign(window,{HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
 </script>
 <script type="text/babel">/* Gmail 연동: Google Identity Services(브라우저 OAuth 토큰) + Gmail REST API
    흐름: 연결(승인 창) → 토큰(1시간) → 받은편지함/보낸편지함 가져오기 · 보내기
@@ -35929,8 +35941,12 @@ const Gmail={
   /* 받은편지함 + 보낸편지함 가져오기. 이미 있는 메일(gid)은 건너뛰고 읽음/별표만 갱신 */
   async sync(acc,existing,onProgress){
     const have=new Map(existing.filter(m=>m.gid).map(m=>[m.gid,m]));const out=[];let fetched=0,skipped=0;
+    /* 광고·소셜·알림(Gmail 카테고리)은 기본 제외 — 설정 › 메일 연동에서 끌 수 있음 */
+    const clean=Store.cfg.mailFilter!==false;
     for(const [label,max] of [['INBOX',60],['SENT',20]]){
-      const list=await this.api(`messages?labelIds=${label}&maxResults=${max}&q=${encodeURIComponent('newer_than:60d')}`);
+      const q=['newer_than:60d'];
+      if(clean&&label==='INBOX')q.push('-category:promotions','-category:social','-category:forums','-category:updates','-in:spam');
+      const list=await this.api(`messages?labelIds=${label}&maxResults=${max}&q=${encodeURIComponent(q.join(' '))}`);
       const ids=(list.messages||[]).map(m=>m.id);
       for(let i=0;i<ids.length;i+=10){ /* 10개씩 병렬 */
         const chunk=ids.slice(i,i+10).filter(id=>{if(have.has(id)){skipped++;return false;}return true;});
@@ -35961,7 +35977,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v1.6'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.0'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36005,6 +36021,10 @@ function SettingsModal({open,onClose,onToast}){
       <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>개인 메일 (Gmail)</div>
       <InfoBar>Google 콘솔에서 Gmail API를 켜고 OAuth 클라이언트(웹)를 만든 뒤 Client ID를 입력하면 메일 화면의 🔗 계정 연결에서 "Google 연결"이 활성화됩니다(가이드 04). 호스팅 주소에서는 pms.config.js의 gmailClientId로도 지정할 수 있습니다.</InfoBar>
       <Field label="Gmail OAuth Client ID"><TextInput value={c.gmailClientId||''} onChange={set('gmailClientId')} placeholder="xxxx.apps.googleusercontent.com"/></Field>
+      <label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 10px',border:'1px solid var(--border-default)',borderRadius:4,cursor:'pointer'}}>
+        <input type="checkbox" checked={c.mailFilter!==false} onChange={e=>setC({...c,mailFilter:e.target.checked})} style={{marginTop:3}}/>
+        <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>광고 · 소셜 · 알림 메일 제외</span>
+        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>Gmail이 프로모션 · 소셜 · 알림 · 포럼으로 분류한 메일과 스팸을 동기화에서 빼고 기본 메일함만 가져옵니다</div></span></label>
     </>}
     {tab==='ai'&&<ClaudeTab c={c} setC={setC}/>}
   </Modal>;
@@ -36036,10 +36056,12 @@ Object.assign(window,{Login,SettingsModal});
 const FOLDERS=[{id:'inbox',num:'①',label:'받은편지함'},{id:'starred',num:'②',label:'별표'},{id:'sent',num:'③',label:'보낸편지함'},{id:'draft',num:'④',label:'임시보관'},{id:'archive',num:'⑤',label:'보관'}];
 function mailNav(st,set,db){
   const cnt=id=>db.mails.filter(m=>(id==='all'||m.acc===id)&&m.folder==='inbox'&&!m.read).length;
-  const accs=[{id:'all',label:'전체 메일'+(cnt('all')?' · '+cnt('all'):'')},...db.accounts.map(a=>({id:a.id,label:a.label+(cnt(a.id)?' · '+cnt(a.id):'')}))];
-  return [{label:'계정',items:accs,value:st.acc,onChange:v=>set({acc:v,sel:null})},{label:'폴더',items:FOLDERS,value:st.folder,onChange:v=>set({folder:v,sel:null})}];
+  const badge=n=>n?<span style={{color:'var(--color-accent)',fontFamily:'var(--font-num)',marginLeft:6}}>{n}</span>:null;
+  const accs=[{id:'all',label:<span>전체 메일{badge(cnt('all'))}</span>},
+    ...db.accounts.map(a=>({id:a.id,label:<span style={{display:'inline-flex',alignItems:'center',paddingLeft:12}}><span style={{color:'var(--text-label)',marginRight:5,fontSize:11}}>└</span>{a.label}{badge(cnt(a.id))}</span>}))];
+  return [{label:'계정',items:accs,value:st.acc,onChange:v=>set({acc:v,sel:null,picked:[]})},
+    {label:'폴더',items:FOLDERS,value:st.folder,onChange:v=>set({folder:v,sel:null,picked:[]})}];
 }
-
 /* ---------- 인코딩 유틸 ---------- */
 const CP_NAMES={949:'euc-kr',51949:'euc-kr',1200:'utf-16le',65001:'utf-8',932:'shift_jis',936:'gbk',1252:'windows-1252'};
 function decodeBytes(bytes,charset){const cs=(charset||'utf-8').toString().toLowerCase().replace(/^ks_c_5601[-_]1987$/,'euc-kr').replace(/^cp949$|^ms949$|^x-windows-949$/,'euc-kr').replace(/^cp(\d+)$/,(m,n)=>CP_NAMES[+n]||'windows-'+n);
@@ -36141,6 +36163,10 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const accOf=id=>db.accounts.find(a=>a.id===id)||{};
   const title=(st.acc==='all'?'전체':accOf(st.acc).label)+' ▸ '+FOLDERS.find(f=>f.id===st.folder).label;
   const open=m=>{set({sel:m.id});if(!m.read)upd(m.id,{read:true});};
+  const picked=st.picked||[];
+  const togglePick=id=>set({picked:picked.includes(id)?picked.filter(x=>x!==id):[...picked,id]});
+  const bulk=(patch,msg)=>{setDb('mails',db.mails.map(m=>picked.includes(m.id)?{...m,...patch}:m));set({picked:[],sel:null});toast(picked.length+'건 '+msg);};
+  const bulkDelete=()=>{setDb('mails',db.mails.filter(m=>!picked.includes(m.id)));set({picked:[],sel:null});toast(picked.length+'건 삭제됨');};
   const compose=(mode)=>{const a=cur&&accOf(cur.acc);const base={acc:cur?cur.acc:(st.acc==='all'?'work':st.acc),to:'',cc:'',subject:'',body:''};
     if(mode==='reply')Object.assign(base,{to:cur.from,subject:'RE: '+cur.subject.replace(/^RE:\s*/i,''),body:'\n\n---- 원본 메일 ----\n'+cur.body});
     if(mode==='fwd')Object.assign(base,{subject:'FW: '+cur.subject,body:'\n\n---- 전달된 메일 ----\n보낸 사람: '+cur.from+'\n제목: '+cur.subject+'\n\n'+cur.body});
@@ -36173,10 +36199,23 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
       toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button></>}
       toolbarRight={<><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·보낸 사람·본문" style={{width:220,padding:'4px 8px'}}/><Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
+      {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)',flexWrap:'wrap'}}>
+        <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>건 선택
+        <Button variant="gray" size="xs" onClick={()=>bulk({read:true},'읽음 처리')}>✓ 읽음</Button>
+        <Button variant="gray" size="xs" onClick={()=>bulk({read:false},'안읽음 처리')}>읽지 않음</Button>
+        <Button variant="gray" size="xs" onClick={()=>bulk({star:true},'별표')}>★ 별표</Button>
+        <Button variant="gray" size="xs" onClick={()=>bulk({folder:'archive'},'보관됨')}>🗄 보관</Button>
+        <Button variant="gray" size="xs" onClick={()=>bulk({folder:'inbox'},'받은편지함으로')}>📥 받은편지함</Button>
+        <span style={{color:'var(--text-label)'}}>|</span>
+        {db.accounts.map(a=><Button key={a.id} variant="gray" size="xs" onClick={()=>bulk({acc:a.id},'→ '+a.label)}>→ {a.label}</Button>)}
+        <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
+        <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
       <div style={{display:'grid',gridTemplateColumns:'minmax(280px,360px) minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
         <div style={{borderRight:'1px solid var(--border-default)',overflowY:'auto',maxHeight:'calc(100vh - 262px)'}}>
+          <label style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-label)',background:'var(--surface-hover)',cursor:'pointer',position:'sticky',top:0,zIndex:2}}>
+            <input type="checkbox" checked={list.length>0&&list.every(m=>picked.includes(m.id))} onChange={()=>set({picked:list.every(m=>picked.includes(m.id))?[]:list.map(m=>m.id)})}/>전체 선택</label>
           {list.length===0&&<div style={{padding:24,color:'var(--text-label)',textAlign:'center',fontSize:'var(--fs-base)'}}>메일 없음</div>}
-          {list.map(m=><MailRow key={m.id} m={m} on={m.id===st.sel} acc={accOf(m.acc)} onClick={()=>open(m)} onStar={e=>{e.stopPropagation();upd(m.id,{star:!m.star});}}/>)}
+          {list.map(m=><MailRow key={m.id} m={m} on={m.id===st.sel} picked={picked.includes(m.id)} onPick={()=>togglePick(m.id)} acc={accOf(m.acc)} onClick={()=>open(m)} onStar={e=>{e.stopPropagation();upd(m.id,{star:!m.star});}}/>)}
         </div>
         <div style={{padding:'14px 18px',overflowY:'auto',maxHeight:'calc(100vh - 262px)'}}>
           {!cur&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80,fontSize:'var(--fs-base)'}}>메일을 선택하세요</div>}
@@ -36214,12 +36253,13 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
     </Modal>
   </>;
 }
-function MailRow({m,on,acc,onClick,onStar}){const [h,setH]=React.useState(false);return <div onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{padding:'8px 12px',borderBottom:'1px solid var(--border-default)',background:on?'var(--surface-active)':h?'var(--surface-hover)':'#fff',cursor:'pointer',display:'grid',gridTemplateColumns:'16px 1fr auto',columnGap:8,fontSize:'var(--fs-base)'}}>
-  <span onClick={onStar} style={{color:m.star?'#e6a800':'var(--wb-line-strong)',fontSize:13,lineHeight:1.4}}>{m.star?'★':'☆'}</span>
-  <div style={{minWidth:0}}><div style={{display:'flex',gap:6,alignItems:'center'}}>{!m.read&&<span style={{width:6,height:6,borderRadius:3,background:'var(--color-accent)',flex:'0 0 auto'}}></span>}<span style={{fontWeight:m.read?500:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.from.replace(/<.*>/,'').trim()}</span></div>
+function MailRow({m,on,picked,onPick,acc,onClick,onStar}){const [h,setH]=React.useState(false);return <div onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{padding:'8px 12px 8px 8px',borderBottom:'1px solid var(--border-default)',background:on?'var(--surface-active)':h?'var(--surface-hover)':'#fff',display:'grid',gridTemplateColumns:'20px 16px 1fr auto',columnGap:6,fontSize:'var(--fs-base)',alignItems:'start'}}>
+  <input type="checkbox" checked={!!picked} onChange={onPick} onClick={e=>e.stopPropagation()} style={{marginTop:3}}/>
+  <span onClick={onStar} style={{color:m.star?'#e6a800':'var(--wb-line-strong)',fontSize:13,lineHeight:1.4,cursor:'pointer'}}>{m.star?'★':'☆'}</span>
+  <div onClick={onClick} style={{minWidth:0,cursor:'pointer'}}><div style={{display:'flex',gap:6,alignItems:'center'}}>{!m.read&&<span style={{width:6,height:6,borderRadius:3,background:'var(--color-accent)',flex:'0 0 auto'}}></span>}<span style={{fontWeight:m.read?500:700,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.from.replace(/<.*>/,'').trim()}</span></div>
     <div style={{fontWeight:m.read?400:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.subject}</div>
-    <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.body.split('\n')[0]}</div></div>
-  <div style={{textAlign:'right',fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)'}}>{fmtDT(m.date)}<div style={{marginTop:3,color:acc.provider==='gmail'?'var(--color-success)':'var(--color-accent)',fontFamily:'var(--font-sans)'}}>{acc.provider==='gmail'?'개인':'회사'}</div></div>
+    <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(m.body||'').split('\n')[0]}</div></div>
+  <div onClick={onClick} style={{textAlign:'right',fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',cursor:'pointer'}}>{fmtDT(m.date)}<div style={{marginTop:3,color:acc.provider==='gmail'?'var(--color-success)':'var(--color-accent)',fontFamily:'var(--font-sans)'}}>{acc.label||''}</div></div>
 </div>;}
 function ComposeModal({draft,accounts,onClose,onSend}){
   const {Button,Modal}=window.HDWorkbookDesignSystem_ad60e4;const [d,setD]=React.useState(draft);React.useEffect(()=>setD(draft),[draft]);if(!d)return null;
@@ -36248,39 +36288,53 @@ function ImportModal({open,accounts,onClose,onImport}){
 }
 Object.assign(window,{MailView,mailNav,FOLDERS});
 </script>
-<script type="text/babel">/* 일정 관리: 오늘 · 월간 · 주간 · 목록 · 칸반 + 속성 패널(노션 스타일) · 반복 · ICS */
-const CAL_VIEWS=[{id:'today',num:'①',label:'오늘 / 할 일'},{id:'month',num:'②',label:'월간'},{id:'week',num:'③',label:'주간 타임라인'},{id:'list',num:'④',label:'목록'},{id:'board',num:'⑤',label:'칸반'}];
-function calNav(st,set){return [{label:'보기',items:CAL_VIEWS,value:st.view,onChange:v=>set({view:v})},{label:'캘린더',items:[{id:'all',label:'전체'},{id:'work',label:'● 회사'},{id:'personal',label:'● 개인'}],value:st.cal,onChange:v=>set({cal:v})}];}
-const emptyEvent=(date)=>({id:uid(),title:'',date:date||todayISO(),start:'',end:'',cal:'work',status:'todo',priority:'mid',repeat:'none',notes:''});
+<script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
+const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
+function calNav(st,set){return [{label:'보기',items:CAL_VIEWS,value:st.view||'month',onChange:v=>set({view:v})}];}
+const emptyEvent=(date)=>({id:uid(),title:'',date:date||todayISO(),start:'',end:'',cal:'work',status:'todo',category:'',milestones:[],repeat:'none',notes:''});
 const monthStart=iso=>iso.slice(0,8)+'01';
 const weekStart=iso=>{const d=new Date(iso+'T00:00:00');return shiftDay(iso,-d.getDay());};
+const msList=e=>(e.milestones||[]).filter(m=>m&&m.date).sort((a,b)=>a.date.localeCompare(b.date));
+const nextMs=e=>{const t=todayISO();return msList(e).find(m=>m.date>=t)||msList(e).slice(-1)[0]||null;};
+
+/* 회사/개인 체크박스 — 색상 점과 함께 */
+function CalToggle({cals,onChange}){
+  return <span style={{display:'inline-flex',gap:10,alignItems:'center',marginLeft:4}}>
+    {['work','personal'].map(c=><label key={c} style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:'var(--fs-sm2)',cursor:'pointer',color:cals[c]?'var(--text-body)':'var(--text-label)'}}>
+      <input type="checkbox" checked={!!cals[c]} onChange={()=>onChange({...cals,[c]:!cals[c]})} style={{accentColor:CAL_COLOR[c],margin:0}}/>
+      <span style={{width:8,height:8,borderRadius:4,background:cals[c]?CAL_COLOR[c]:'var(--border-strong)',display:'inline-block'}}></span>{CAL_LABEL[c]}</label>)}
+  </span>;
+}
 
 function CalendarView({db,setDb,st,set,toast,sendToNote}){
-  const {Card,Button,Badge,Modal,InfoBar,KpiStat}=window.HDWorkbookDesignSystem_ad60e4;
-  const today=todayISO();const anchor=st.anchor||today;
-  const events=db.events.filter(e=>st.cal==='all'||e.cal===st.cal);
+  const {Card,Button,Badge,Modal,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const today=todayISO();const anchor=st.anchor||today;const view=st.view||'month';const sub=st.sub||'month';
+  const cals=st.cals||{work:true,personal:true};
+  const events=db.events.filter(e=>cals[e.cal]);
+  const categories=[...new Set(db.events.map(e=>e.category).filter(Boolean))].sort();
   const save=ev=>{const exists=db.events.some(e=>e.id===ev.id);setDb('events',exists?db.events.map(e=>e.id===ev.id?ev:e):[...db.events,ev]);};
   const del=id=>{setDb('events',db.events.filter(e=>e.id!==id));set({edit:null});toast('삭제됨');};
   const openNew=(date,extra)=>set({edit:{...emptyEvent(date),...extra}});
-  const move=(n)=>{const d=new Date(anchor+'T00:00:00');if(st.view==='week')d.setDate(d.getDate()+7*n);else d.setMonth(d.getMonth()+n);set({anchor:isoDate(d)});};
+  const moveDate=(id,date)=>{const e=db.events.find(x=>x.id===id);if(!e||e.date===date)return;save({...e,date});toast('『'+(e.title||'제목 없음')+'』 → '+date);};
+  const step=n=>{const d=new Date(anchor+'T00:00:00');if(sub==='week')d.setDate(d.getDate()+7*n);else d.setMonth(d.getMonth()+n);set({anchor:isoDate(d)});};
   const exportICS=()=>{const blob=new Blob([toICS(db.events)],{type:'text/calendar'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pms-calendar.ics';a.click();toast('ICS 내보내기');};
   const importICS=async fs=>{let n=0;for(const f of fs){const evs=fromICS(await f.text());n+=evs.length;setDb('events',[...db.events,...evs]);}set({icsOpen:false});toast(n+'건 가져옴');};
-  const label={today:'오늘 · '+today,month:anchor.slice(0,4)+'년 '+Number(anchor.slice(5,7))+'월',week:weekStart(anchor)+' 주',list:'목록',board:'칸반'}[st.view];
-  const nav=(st.view==='month'||st.view==='week')&&<><Button variant="ghost" size="sm" onClick={()=>move(-1)}>◂</Button><Button variant="ghost" size="sm" onClick={()=>set({anchor:today})}>오늘</Button><Button variant="ghost" size="sm" onClick={()=>move(1)}>▸</Button></>;
-  const body={
-    today:<TodayView events={events} today={today} onOpen={e=>set({edit:e})} onNew={()=>openNew(today)} onStatus={(e,s)=>save({...e,status:s})} KpiStat={KpiStat}/>,
-    month:<MonthGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew}/>,
-    week:<WeekGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew}/>,
-    list:<ListView events={events} st={st} set={set} onOpen={e=>set({edit:e})} onStatus={(e,s)=>save({...e,status:s})}/>,
-    board:<BoardView events={events} onOpen={e=>set({edit:e})} onStatus={(e,s)=>save({...e,status:s})} onNew={s=>openNew(today,{status:s})}/>
-  }[st.view];
+  const label=view==='list'?'목록':sub==='week'?weekStart(anchor)+' 주':anchor.slice(0,4)+'년 '+Number(anchor.slice(5,7))+'월';
+  const seg=view==='month'&&<span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:6}}>
+    {[['month','월간'],['week','주간']].map(([k,l])=><button key={k} type="button" onClick={()=>set({sub:k})} style={{border:'none',borderRadius:4,padding:'3px 11px',fontSize:'var(--fs-sm2)',fontWeight:sub===k?600:500,background:sub===k?'var(--surface-active)':'transparent',color:sub===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span>;
+  const nav=view==='month'&&<><Button variant="ghost" size="sm" onClick={()=>step(-1)}>◂</Button><Button variant="ghost" size="sm" onClick={()=>set({anchor:today})}>오늘</Button><Button variant="ghost" size="sm" onClick={()=>step(1)}>▸</Button></>;
+  const body=view==='list'
+    ? <ListView events={events} categories={categories} st={st} set={set} onOpen={e=>set({edit:e})}/>
+    : sub==='week'
+      ? <WeekGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew}/>
+      : <MonthGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew} onMove={moveDate}/>;
   return <>
     <Card title={label} badge={<Badge tone="muted">{events.length}건</Badge>}
-      toolbar={<><Button icon="+" onClick={()=>openNew(st.view==='month'||st.view==='week'?anchor:today)}>새 일정</Button>{nav}</>}
-      toolbarRight={<><Button variant="classic" size="sm" icon="📥" onClick={exportICS}>ICS 내보내기</Button><Button variant="accent" size="sm" icon="📤" onClick={()=>set({icsOpen:true})}>ICS 가져오기</Button></>}>
+      toolbar={<><Button icon="+" onClick={()=>openNew(view==='month'?anchor:today)}>새 일정</Button>{nav}{seg}</>}
+      toolbarRight={<><CalToggle cals={cals} onChange={c=>set({cals:c})}/><Button variant="classic" size="sm" icon="📥" onClick={exportICS}>ICS 내보내기</Button><Button variant="accent" size="sm" icon="📤" onClick={()=>set({icsOpen:true})}>ICS 가져오기</Button></>}>
       {body}
     </Card>
-    <EventPanel ev={st.edit} onClose={()=>set({edit:null})} onSave={ev=>{save(ev);set({edit:null});}} onDelete={del} onNote={sendToNote}/>
+    <EventPanel ev={st.edit} categories={categories} onClose={()=>set({edit:null})} onSave={ev=>{save(ev);set({edit:null});}} onDelete={del} onNote={sendToNote}/>
     <Modal open={!!st.icsOpen} onClose={()=>set({icsOpen:false})} title="ICS 가져오기" footer={<Button variant="gray" onClick={()=>set({icsOpen:false})}>닫기</Button>}>
       <window.HDWorkbookDesignSystem_ad60e4.DropZone title="📅 .ics 파일을 여기에 놓으세요" sub="Google 캘린더 › 설정 › 내보내기 / Outlook › 일정 저장(.ics)" accept=".ics" onFiles={importICS}/>
       <InfoBar>CATEGORIES에 personal이 있으면 개인 캘린더로, 그 외는 회사로 분류됩니다.</InfoBar>
@@ -36288,44 +36342,63 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   </>;
 }
 
-function EvChip({e,onClick,compact}){return <div onClick={ev=>{ev.stopPropagation();onClick(e);}} title={e.title} style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:compact?11:12,color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>{e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}<span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{e.title||'(제목 없음)'}</span>{e.repeat!=='none'&&<span style={{color:'var(--text-label)'}}>↻</span>}</div>;}
-
-function TodayView({events,today,onOpen,onNew,onStatus,KpiStat}){
-  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
-  const week=expandEvents(events,today,shiftDay(today,6));const td=week.filter(e=>e.date===today);const over=events.filter(e=>e.date<today&&e.status!=='done'&&e.repeat==='none');
-  const Sec=({title,items,empty})=><div style={{marginBottom:18}}><div style={{font:'var(--type-card-title)',padding:'0 0 6px',borderBottom:'1px solid var(--border-default)',marginBottom:6}}>{title} <span style={{color:'var(--text-label)',fontWeight:400,fontSize:'var(--fs-sm)'}}>{items.length}</span></div>
-    {items.length===0&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-base)',padding:'6px 0'}}>{empty}</div>}
-    {items.map((e,i)=><div key={e.id+e.date+i} style={{display:'grid',gridTemplateColumns:'20px 60px 1fr auto',alignItems:'center',gap:8,padding:'5px 4px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-md2)'}}>
-      <input type="checkbox" checked={e.status==='done'} onChange={()=>onStatus(e,e.status==='done'?'todo':'done')}/>
-      <span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)',fontSize:12}}>{e.date!==today?e.date.slice(5):(e.start||'종일')}</span>
-      <span onClick={()=>onOpen(e)} style={{cursor:'pointer',textDecoration:e.status==='done'?'line-through':'none',color:e.status==='done'?'var(--text-label)':'var(--text-body)'}}><span style={{display:'inline-block',width:8,height:8,borderRadius:4,background:CAL_COLOR[e.cal],marginRight:6}}></span>{e.title}</span>
-      <span style={{display:'flex',gap:4}}>{e.priority==='high'&&<Badge2 c="var(--color-danger)">높음</Badge2>}<Badge2>{STATUS_LABEL[e.status]}</Badge2></span></div>)}</div>;
-  return <div>
-    <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(0,1fr))',gap:10,marginBottom:18}}>
-      <KpiStat label="오늘 일정" value={td.length} unit="건"/><KpiStat label="이번 주" value={week.length} unit="건"/><KpiStat label="진행 중" value={events.filter(e=>e.status==='doing').length} unit="건"/><KpiStat label="기한 지남" value={over.length} unit="건" sub={over.length?'확인 필요':'없음'}/>
-    </div>
-    <Sec title={'📅 오늘 · '+today} items={td} empty="오늘 일정 없음"/>
-    <Sec title="⚠ 기한 지난 할 일" items={over} empty="없음"/>
-    <Sec title="이번 주" items={week.filter(e=>e.date!==today)} empty="예정된 일정 없음"/>
-    <Button variant="gray" size="sm" onClick={onNew}>+ 할 일 추가</Button>
-  </div>;
+function EvChip({e,onClick,compact,draggable,onDragStart}){
+  return <div draggable={draggable} onDragStart={onDragStart} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
+    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:compact?11:12,color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
+    {e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
+    <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{e.title||'(제목 없음)'}</span>
+    {e.status==='doing'&&<span style={{color:CAL_COLOR[e.cal],fontSize:9}}>◐</span>}
+    {e.repeat!=='none'&&<span style={{color:'var(--text-label)'}}>↻</span>}</div>;
+}
+function MsChip({m,e,onClick,compact}){
+  return <div onClick={ev=>{ev.stopPropagation();onClick(e);}} title={'마일스톤 · '+(e.title||'')+' · '+m.title}
+    style={{display:'flex',alignItems:'center',gap:3,padding:'1px 5px',borderRadius:3,border:'1px dashed '+CAL_COLOR[e.cal],fontSize:compact?10.5:11.5,color:'var(--text-muted)',cursor:'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',background:'#fff'}}>
+    <span style={{color:CAL_COLOR[e.cal]}}>◆</span><span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{m.title||'마일스톤'}</span></div>;
 }
 function Badge2({children,c}){return <span style={{fontSize:10.5,padding:'1px 7px',borderRadius:10,border:'1px solid '+(c||'var(--border-default)'),color:c||'var(--text-muted)',fontWeight:500}}>{children}</span>;}
 
-function MonthGrid({events,anchor,today,onOpen,onNew}){
-  const ms=monthStart(anchor);const first=new Date(ms+'T00:00:00');const startISO=shiftDay(ms,-first.getDay());const days=[...Array(42)].map((_,i)=>shiftDay(startISO,i));const occ=expandEvents(events,days[0],days[41]);
+/* 월간: 공휴일 표시 · 일정 드래그로 날짜 이동 · 마일스톤 마커 */
+function MonthGrid({events,anchor,today,onOpen,onNew,onMove}){
+  const ms=monthStart(anchor);const first=new Date(ms+'T00:00:00');const startISO=shiftDay(ms,-first.getDay());
+  const days=[...Array(42)].map((_,i)=>shiftDay(startISO,i));
+  const occ=expandEvents(events,days[0],days[41]);
+  const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[41])stones.push({m,e});}));
+  const [over,setOver]=React.useState(null);
+  const drop=d=>ev=>{ev.preventDefault();setOver(null);const id=ev.dataTransfer.getData('text/pms-event');if(id)onMove(id,d);};
   return <div style={{border:'1px solid var(--border-strong)'}}>
     <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))',borderBottom:'1.3px solid var(--border-table-head)'}}>{['일','월','화','수','목','금','토'].map((d,i)=><div key={d} style={{padding:'5px 0',textAlign:'center',fontSize:'var(--fs-sm2)',fontWeight:700,color:i===0?'var(--color-danger)':i===6?'var(--color-accent)':'var(--text-body)'}}>{d}</div>)}</div>
-    <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))'}}>{days.map((d,i)=>{const inM=d.slice(0,7)===ms.slice(0,7);const es=occ.filter(e=>e.date===d);return <div key={d} onClick={()=>onNew(d)} style={{minHeight:92,padding:'4px 5px',borderRight:i%7<6?'1px solid var(--border-default)':'none',borderBottom:i<35?'1px solid var(--border-default)':'none',background:inM?(d===today?'var(--surface-input-cell)':'#fff'):'var(--surface-hover)',cursor:'pointer'}}>
-      <div style={{fontFamily:'var(--font-num)',fontSize:12,fontWeight:d===today?700:400,color:inM?(d===today?'var(--color-accent)':'var(--text-body)'):'var(--text-label)',marginBottom:3,display:'flex',justifyContent:'space-between'}}><span>{Number(d.slice(8))}</span>{d===today&&<span style={{fontSize:10,fontFamily:'var(--font-sans)'}}>오늘</span>}</div>
-      <div style={{display:'flex',flexDirection:'column',gap:2}}>{es.slice(0,3).map((e,j)=><EvChip key={e.id+j} e={e} onClick={onOpen} compact/>)}{es.length>3&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{es.length-3}</span>}</div></div>;})}</div>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))'}}>{days.map((d,i)=>{
+      const inM=d.slice(0,7)===ms.slice(0,7);const dow=i%7;const hol=holidayOf(d);
+      const es=occ.filter(e=>e.date===d);const sts=stones.filter(s=>s.m.date===d);
+      const items=es.length+sts.length;
+      const dcol=hol||dow===0?'var(--color-danger)':dow===6?'var(--color-accent)':'var(--text-body)';
+      return <div key={d} onClick={()=>onNew(d)} onDragOver={ev=>{ev.preventDefault();setOver(d);}} onDragLeave={()=>setOver(o=>o===d?null:o)} onDrop={drop(d)}
+        style={{minHeight:96,padding:'4px 5px',borderRight:dow<6?'1px solid var(--border-default)':'none',borderBottom:i<35?'1px solid var(--border-default)':'none',
+          background:over===d?'var(--surface-link-cell)':inM?(d===today?'var(--surface-input-cell)':hol?'var(--color-danger-surface)':'#fff'):'var(--surface-hover)',cursor:'pointer',overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'baseline',gap:4,marginBottom:3}}>
+          <span style={{fontFamily:'var(--font-num)',fontSize:12,fontWeight:d===today?700:400,color:inM?dcol:'var(--text-label)'}}>{Number(d.slice(8))}</span>
+          {hol&&inM&&<span style={{fontSize:10,color:'var(--color-danger)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{hol.replace(/^대체공휴일\((.*)\)$/,'$1 대체')}</span>}
+          {d===today&&<span style={{fontSize:10,marginLeft:'auto',color:'var(--color-accent)'}}>오늘</span>}
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:2}}>
+          {es.slice(0,3).map((e,j)=><EvChip key={e.id+j} e={e} onClick={onOpen} compact draggable={e.repeat==='none'} onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';}}/>)}
+          {sts.slice(0,Math.max(0,4-Math.min(es.length,3))).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={onOpen} compact/>)}
+          {items>4&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-4}</span>}
+        </div></div>;})}</div>
+    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>일정을 다른 날짜로 끌어 옮길 수 있습니다 · ◆ 마일스톤 · 반복 일정(↻)은 이동 불가</div>
   </div>;
 }
+
 function WeekGrid({events,anchor,today,onOpen,onNew}){
   const ws=weekStart(anchor);const days=[...Array(7)].map((_,i)=>shiftDay(ws,i));const occ=expandEvents(events,days[0],days[6]);const H0=7,H1=21,PX=44;
+  const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[6])stones.push({m,e});}));
   const allDay=d=>occ.filter(e=>e.date===d&&!e.start);
   return <div style={{border:'1px solid var(--border-strong)',overflowX:'auto'}}>
-    <div style={{display:'grid',gridTemplateColumns:'48px repeat(7,minmax(110px,1fr))',borderBottom:'1.3px solid var(--border-table-head)'}}><div></div>{days.map(d=>{const dt=new Date(d+'T00:00:00');return <div key={d} style={{padding:'6px 4px',textAlign:'center',borderLeft:'1px solid var(--border-default)',background:d===today?'var(--surface-input-cell)':'#fff'}}><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{['일','월','화','수','목','금','토'][dt.getDay()]}</div><div style={{fontFamily:'var(--font-num)',fontWeight:700,fontSize:15,color:d===today?'var(--color-accent)':'var(--text-body)'}}>{dt.getDate()}</div><div style={{display:'flex',flexDirection:'column',gap:2,marginTop:3}}>{allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} onClick={onOpen} compact/>)}</div></div>;})}</div>
+    <div style={{display:'grid',gridTemplateColumns:'48px repeat(7,minmax(110px,1fr))',borderBottom:'1.3px solid var(--border-table-head)'}}><div></div>{days.map(d=>{const dt=new Date(d+'T00:00:00');const hol=holidayOf(d);return <div key={d} style={{padding:'6px 4px',textAlign:'center',borderLeft:'1px solid var(--border-default)',background:d===today?'var(--surface-input-cell)':hol?'var(--color-danger-surface)':'#fff'}}>
+      <div style={{fontSize:'var(--fs-sm)',color:hol||dt.getDay()===0?'var(--color-danger)':dt.getDay()===6?'var(--color-accent)':'var(--text-label)'}}>{['일','월','화','수','목','금','토'][dt.getDay()]}</div>
+      <div style={{fontFamily:'var(--font-num)',fontWeight:700,fontSize:15,color:d===today?'var(--color-accent)':hol?'var(--color-danger)':'var(--text-body)'}}>{dt.getDate()}</div>
+      {hol&&<div style={{fontSize:10,color:'var(--color-danger)'}}>{hol.replace(/^대체공휴일\((.*)\)$/,'$1 대체')}</div>}
+      <div style={{display:'flex',flexDirection:'column',gap:2,marginTop:3}}>{allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} onClick={onOpen} compact/>)}{stones.filter(s=>s.m.date===d).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={onOpen} compact/>)}</div></div>;})}</div>
     <div style={{display:'grid',gridTemplateColumns:'48px repeat(7,minmax(110px,1fr))',position:'relative'}}>
       <div>{[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,fontFamily:'var(--font-num)',fontSize:11,color:'var(--text-label)',textAlign:'right',paddingRight:6,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}>{pad2(H0+i)}:00</div>)}</div>
       {days.map(d=><div key={d} onClick={ev=>{const y=ev.nativeEvent.offsetY;const h=H0+Math.floor(y/PX);onNew(d,{start:pad2(h)+':00',end:pad2(h+1)+':00'});}} style={{position:'relative',borderLeft:'1px solid var(--border-default)',background:d===today?'var(--surface-input-cell)':'#fff'}}>
@@ -36335,41 +36408,83 @@ function WeekGrid({events,anchor,today,onOpen,onNew}){
     </div>
   </div>;
 }
-function ListView({events,st,set,onOpen,onStatus}){
-  const {DataTable}=window.HDWorkbookDesignSystem_ad60e4;const f=st.filter||{status:'all',pri:'all'};const setF=p=>set({filter:{...f,...p}});
-  const rows=events.filter(e=>(f.status==='all'||e.status===f.status)&&(f.pri==='all'||e.priority===f.pri)).sort((a,b)=>(a.date+a.start).localeCompare(b.date+b.start));
-  const cols=[{key:'done',label:'✓',width:34,align:'center',render:(v,r)=><input type="checkbox" checked={r.status==='done'} onChange={()=>onStatus(r,r.status==='done'?'todo':'done')}/>},{key:'date',label:'날짜',width:96,align:'center'},{key:'start',label:'시간',width:90,align:'center',render:(v,r)=>r.start?r.start+(r.end?'–'+r.end:''):'종일'},{key:'title',label:'제목',align:'left',render:(v,r)=><span onClick={()=>onOpen(r)} style={{cursor:'pointer',fontFamily:'var(--font-sans)',fontWeight:500,textDecoration:r.status==='done'?'line-through':'none'}}>{v}</span>},{key:'cal',label:'캘린더',width:70,align:'center',render:v=><span style={{color:CAL_COLOR[v],fontFamily:'var(--font-sans)'}}>● {CAL_LABEL[v]}</span>},{key:'status',label:'상태',width:70,align:'center',render:v=><span style={{fontFamily:'var(--font-sans)'}}>{STATUS_LABEL[v]}</span>},{key:'priority',label:'우선순위',width:70,align:'center',render:v=><span style={{fontFamily:'var(--font-sans)',color:v==='high'?'var(--color-danger)':'inherit'}}>{PRI_LABEL[v]}</span>},{key:'repeat',label:'반복',width:60,align:'center',render:v=>v==='none'?'':'↻ '+{daily:'매일',weekly:'매주',monthly:'매월'}[v]}];
+
+/* 목록: 카테고리 · 제목 · 마일스톤 · 날짜 · 상태 · 비고 + 열별 필터 */
+function ListView({events,categories,st,set,onOpen}){
+  const {DataTable,Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const f=st.lf||{category:'',title:'',ms:'',date:'',status:'',notes:''};
+  const setF=p=>set({lf:{...f,...p}});
+  const has=(v,q)=>!q||String(v||'').toLowerCase().includes(q.toLowerCase());
+  const rows=events.filter(e=>
+      (!f.category||(e.category||'')===f.category)
+    &&has(e.title,f.title)
+    &&(!f.ms||msList(e).some(m=>has(m.title,f.ms)||m.date.includes(f.ms)))
+    &&(!f.date||e.date.includes(f.date)||msList(e).some(m=>m.date.includes(f.date)))
+    &&(!f.status||e.status===f.status)
+    &&has(e.notes,f.notes))
+    .sort((a,b)=>a.date.localeCompare(b.date)||(a.start||'').localeCompare(b.start||''));
+  const fin={border:'1px solid var(--border-strong)',borderRadius:3,padding:'2px 4px',fontSize:11,fontFamily:'var(--font-sans)',fontWeight:400,width:'100%',background:'#fff',color:'var(--text-body)',outline:'none',marginTop:3,boxSizing:'border-box'};
+  const H=(text,ctrl)=><span style={{display:'block'}}>{text}<span style={{display:'block',fontWeight:400}} onClick={e=>e.stopPropagation()}>{ctrl}</span></span>;
+  const txt=(k,ph)=><input value={f[k]} placeholder={ph||'검색'} onChange={e=>setF({[k]:e.target.value})} style={fin}/>;
+  const cols=[
+    {key:'category',label:H('카테고리',<select value={f.category} onChange={e=>setF({category:e.target.value})} style={fin}><option value="">전체</option>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select>),width:110,align:'center',
+      render:v=>v?<span style={{fontFamily:'var(--font-sans)',fontSize:11,padding:'1px 7px',borderRadius:10,background:'var(--surface-calc-cell)',color:'var(--text-body)'}}>{v}</span>:<span style={{color:'var(--text-label)'}}>–</span>},
+    {key:'title',label:H('제목',txt('title')),align:'left',
+      render:(v,r)=><span onClick={()=>onOpen(r)} style={{cursor:'pointer',fontFamily:'var(--font-sans)',fontWeight:500,textDecoration:r.status==='done'?'line-through':'none',color:r.status==='done'?'var(--text-label)':'var(--text-body)'}}><span style={{display:'inline-block',width:7,height:7,borderRadius:4,background:CAL_COLOR[r.cal],marginRight:6}}></span>{v||'(제목 없음)'}{r.repeat!=='none'&&<span style={{color:'var(--text-label)',marginLeft:4}}>↻</span>}</span>},
+    {key:'milestones',label:H('마일스톤',txt('ms')),width:190,align:'left',
+      render:(v,r)=>{const L=msList(r);if(!L.length)return <span style={{color:'var(--text-label)'}}>–</span>;const n=nextMs(r);const done=L.filter(m=>m.date<todayISO()).length;
+        return <span style={{fontFamily:'var(--font-sans)',fontSize:11.5}} title={L.map(m=>m.date+' '+m.title).join('\n')}><span style={{color:CAL_COLOR[r.cal]}}>◆</span> <span style={{fontFamily:'var(--font-num)'}}>{done}/{L.length}</span> {n&&<span style={{color:'var(--text-muted)'}}>· {n.title} <span style={{fontFamily:'var(--font-num)'}}>{n.date.slice(5)}</span></span>}</span>;}},
+    {key:'date',label:H('날짜',txt('date','YYYY-MM')),width:120,align:'center',
+      render:(v,r)=><span style={{fontFamily:'var(--font-num)'}}>{v}{r.start?<span style={{color:'var(--text-muted)'}}> {r.start}</span>:''}</span>},
+    {key:'status',label:H('상태',<select value={f.status} onChange={e=>setF({status:e.target.value})} style={fin}><option value="">전체</option>{STATUS_KEYS.map(s=><option key={s} value={s}>{STATUS_LABEL[s]}</option>)}</select>),width:80,align:'center',
+      render:v=><Badge2 c={v==='done'?'var(--color-success)':v==='doing'?'var(--color-accent)':undefined}>{STATUS_LABEL[v]}</Badge2>},
+    {key:'notes',label:H('비고',txt('notes')),align:'left',
+      render:v=><span style={{fontFamily:'var(--font-sans)',color:'var(--text-muted)',fontSize:11.5}}>{(v||'').split('\n').filter(Boolean)[0]||''}</span>}
+  ];
+  const active=Object.values(f).some(Boolean);
   return <div>
-    <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:10,flexWrap:'wrap'}}><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>▽ 상태</span>{['all','todo','doing','done'].map(s=><Chip key={s} on={f.status===s} onClick={()=>setF({status:s})}>{s==='all'?'전체':STATUS_LABEL[s]}</Chip>)}<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginLeft:8}}>▽ 우선순위</span>{['all','high','mid','low'].map(s=><Chip key={s} on={f.pri===s} onClick={()=>setF({pri:s})}>{s==='all'?'전체':PRI_LABEL[s]}</Chip>)}</div>
+    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>
+      <span>▽ 표 머리글에서 열별로 거를 수 있습니다</span>
+      {active&&<Button variant="ghost" size="xs" onClick={()=>set({lf:{category:'',title:'',ms:'',date:'',status:'',notes:''}})}>필터 초기화</Button>}
+      <span style={{marginLeft:'auto',fontFamily:'var(--font-num)'}}>{rows.length}건</span>
+    </div>
     <DataTable columns={cols} rows={rows} stickyFirst={false} dense/>
+    {!rows.length&&<div style={{padding:24,textAlign:'center',color:'var(--text-label)'}}>조건에 맞는 일정 없음</div>}
   </div>;
 }
-function BoardView({events,onOpen,onStatus,onNew}){
-  const {Button}=window.HDWorkbookDesignSystem_ad60e4;const [drag,setDrag]=React.useState(null);
-  return <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(0,1fr))',gap:12}}>{['todo','doing','done'].map(s=><div key={s} onDragOver={e=>e.preventDefault()} onDrop={()=>{if(drag){onStatus(drag,s);setDrag(null);}}} style={{background:'var(--surface-sidebar)',border:'1px solid var(--border-default)',borderRadius:6,padding:8,minHeight:300}}>
-    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 8px',fontSize:'var(--fs-md)',fontWeight:600}}><span>{STATUS_LABEL[s]} <span style={{color:'var(--text-label)',fontWeight:400}}>{events.filter(e=>e.status===s).length}</span></span><Button variant="ghost" size="xs" onClick={()=>onNew(s)}>+</Button></div>
-    <div style={{display:'flex',flexDirection:'column',gap:6}}>{events.filter(e=>e.status===s).sort((a,b)=>a.date.localeCompare(b.date)).map(e=><div key={e.id} draggable onDragStart={()=>setDrag(e)} onClick={()=>onOpen(e)} style={{background:'#fff',border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 10px',cursor:'grab',fontSize:'var(--fs-base)'}}>
-      <div style={{fontWeight:500,marginBottom:4}}>{e.title}</div><div style={{display:'flex',gap:6,alignItems:'center',fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}><span style={{color:CAL_COLOR[e.cal]}}>●</span><span style={{fontFamily:'var(--font-num)'}}>{e.date.slice(5)}{e.start?' '+e.start:''}</span>{e.priority==='high'&&<Badge2 c="var(--color-danger)">높음</Badge2>}{e.repeat!=='none'&&<span>↻</span>}</div></div>)}</div>
-  </div>)}</div>;
-}
-/* 노션식 속성 패널: 우측 슬라이드, 제목 대형 입력, 속성 행 */
-function EventPanel({ev,onClose,onSave,onDelete,onNote}){
-  const {Button}=window.HDWorkbookDesignSystem_ad60e4;const [e,setE]=React.useState(ev);React.useEffect(()=>setE(ev),[ev]);if(!e)return null;
+
+/* 속성 패널: 제목 · 날짜 · 시간 · 캘린더 · 카테고리 · 상태 · 마일스톤 · 반복 · 메모 */
+function EventPanel({ev,categories,onClose,onSave,onDelete,onNote}){
+  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const [e,setE]=React.useState(ev);React.useEffect(()=>setE(ev),[ev]);if(!e)return null;
   const f=k=>v=>setE({...e,[k]:v});const isNew=!e.title&&ev&&!ev.title;
-  const Row=({icon,label,children})=><div style={{display:'grid',gridTemplateColumns:'120px 1fr',alignItems:'center',minHeight:32,borderBottom:'1px solid var(--border-default)'}}><span style={{fontSize:'var(--fs-base)',color:'var(--text-muted)'}}><span style={{marginRight:6}} aria-hidden="true">{icon}</span>{label}</span><span style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>{children}</span></div>;
+  const stones=e.milestones||[];
+  const setMs=(i,p)=>setE({...e,milestones:stones.map((m,j)=>j===i?{...m,...p}:m)});
+  const addMs=()=>setE({...e,milestones:[...stones,{id:uid(),date:e.date,title:'마일스톤 '+(stones.length+1)}]});
+  const delMs=i=>setE({...e,milestones:stones.filter((_,j)=>j!==i)});
+  const Row=({icon,label,children,top})=><div style={{display:'grid',gridTemplateColumns:'110px 1fr',alignItems:top?'start':'center',minHeight:32,borderBottom:'1px solid var(--border-default)',padding:top?'6px 0':0}}><span style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',paddingTop:top?4:0}}><span style={{marginRight:6}} aria-hidden="true">{icon}</span>{label}</span><span style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>{children}</span></div>;
   const bare={border:'none',background:'transparent',fontSize:'var(--fs-base)',fontFamily:'var(--font-sans)',color:'var(--text-body)',padding:'4px 6px',borderRadius:4,outline:'none'};
   return <div style={{position:'fixed',inset:0,zIndex:'var(--z-modal)'}} onClick={onClose}>
-    <div onClick={x=>x.stopPropagation()} style={{position:'absolute',top:0,right:0,bottom:0,width:460,maxWidth:'95vw',background:'#fff',boxShadow:'var(--shadow-popover)',borderLeft:'1px solid var(--border-default)',display:'flex',flexDirection:'column',fontFamily:'var(--font-sans)'}}>
+    <div onClick={x=>x.stopPropagation()} style={{position:'absolute',top:0,right:0,bottom:0,width:480,maxWidth:'95vw',background:'#fff',boxShadow:'var(--shadow-popover)',borderLeft:'1px solid var(--border-default)',display:'flex',flexDirection:'column',fontFamily:'var(--font-sans)'}}>
       <div style={{display:'flex',gap:6,padding:'10px 14px',borderBottom:'1px solid var(--border-default)',alignItems:'center'}}><Button variant="ghost" size="xs" onClick={onClose}>✕</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{isNew?'새 일정':'일정'}</span><span style={{marginLeft:'auto',display:'flex',gap:4}}>{!isNew&&<Button variant="ghost" size="xs" onClick={()=>onNote({subject:e.title,body:e.notes,date:e.date})}>📝 노트로</Button>}{!isNew&&<Button variant="ghost" size="xs" onClick={()=>onDelete(e.id)}>🗑</Button>}</span></div>
       <div style={{padding:'18px 22px',overflowY:'auto',flex:1}}>
         <input autoFocus value={e.title} onChange={x=>f('title')(x.target.value)} placeholder="제목 없음" onKeyDown={x=>x.key==='Enter'&&onSave(e)} style={{...bare,fontSize:22,fontWeight:700,width:'100%',padding:'0 0 12px',marginBottom:6}}/>
-        <Row icon="📅" label="날짜"><input type="date" value={e.date} onChange={x=>f('date')(x.target.value)} style={bare}/></Row>
+        <Row icon="📅" label="날짜"><input type="date" value={e.date} onChange={x=>f('date')(x.target.value)} style={bare}/>{holidayOf(e.date)&&<span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)'}}>{holidayOf(e.date)}</span>}</Row>
         <Row icon="🕘" label="시간"><input type="time" value={e.start} onChange={x=>f('start')(x.target.value)} style={bare}/><span style={{color:'var(--text-label)'}}>–</span><input type="time" value={e.end} onChange={x=>f('end')(x.target.value)} style={bare}/>{e.start&&<Button variant="ghost" size="xs" onClick={()=>setE({...e,start:'',end:''})}>종일</Button>}</Row>
         <Row icon="📁" label="캘린더">{['work','personal'].map(c=><Chip key={c} on={e.cal===c} color={CAL_COLOR[c]} onClick={()=>f('cal')(c)}>● {CAL_LABEL[c]}</Chip>)}</Row>
-        <Row icon="◐" label="상태">{['todo','doing','done'].map(s=><Chip key={s} on={e.status===s} onClick={()=>f('status')(s)}>{STATUS_LABEL[s]}</Chip>)}</Row>
-        <Row icon="⚑" label="우선순위">{['high','mid','low'].map(p=><Chip key={p} on={e.priority===p} color={p==='high'?'#C83C52':undefined} onClick={()=>f('priority')(p)}>{PRI_LABEL[p]}</Chip>)}</Row>
+        <Row icon="🏷" label="카테고리"><input list="pmsCats" value={e.category||''} onChange={x=>f('category')(x.target.value)} placeholder="예: 손익추정 · 사업계획" style={{...bare,width:'100%',borderBottom:'1px dashed var(--border-strong)'}}/><datalist id="pmsCats">{(categories||[]).map(c=><option key={c} value={c}/>)}</datalist></Row>
+        <Row icon="◐" label="상태">{STATUS_KEYS.map(s=><Chip key={s} on={e.status===s} color={s==='done'?'#0a6b3b':s==='doing'?'#4E82AE':undefined} onClick={()=>f('status')(s)}>{STATUS_LABEL[s]}</Chip>)}</Row>
+        <Row icon="◆" label="마일스톤" top>
+          <div style={{width:'100%',display:'flex',flexDirection:'column',gap:4}}>
+            {stones.map((m,i)=><div key={m.id||i} style={{display:'grid',gridTemplateColumns:'118px 1fr 24px',gap:4,alignItems:'center'}}>
+              <input type="date" value={m.date||''} onChange={x=>setMs(i,{date:x.target.value})} style={{...inputStyle,padding:'3px 5px',fontSize:11.5}}/>
+              <input value={m.title||''} onChange={x=>setMs(i,{title:x.target.value})} placeholder={'내용 '+(i+1)} style={{...inputStyle,padding:'3px 6px',fontSize:'var(--fs-base)'}}/>
+              <Button variant="ghost" size="xs" onClick={()=>delMs(i)}>✕</Button></div>)}
+            <div><Button variant="gray" size="xs" onClick={addMs}>+ 마일스톤 추가</Button>{stones.length>0&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginLeft:8}}>월간 캘린더에 ◆로 표시됩니다</span>}</div>
+          </div>
+        </Row>
         <Row icon="↻" label="반복">{[['none','없음'],['daily','매일'],['weekly','매주'],['monthly','매월']].map(([k,l])=><Chip key={k} on={e.repeat===k} onClick={()=>f('repeat')(k)}>{l}</Chip>)}</Row>
-        <div style={{marginTop:14,fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>메모 · 마크다운, [[위키링크]] 가능</div>
+        <div style={{marginTop:14,fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>비고 · 마크다운, [[위키링크]] 가능</div>
         <textarea value={e.notes} onChange={x=>f('notes')(x.target.value)} rows={7} placeholder="내용을 입력하세요" style={{...inputStyle,border:'none',padding:'6px 0',resize:'vertical',lineHeight:1.6,fontSize:'var(--fs-md2)'}}/>
         {e.notes&&<div style={{borderTop:'1px solid var(--border-default)',paddingTop:8}}><Markdown md={e.notes}/></div>}
       </div>
@@ -36377,32 +36492,63 @@ function EventPanel({ev,onClose,onSave,onDelete,onNote}){
     </div>
   </div>;
 }
-Object.assign(window,{CalendarView,calNav,CAL_VIEWS,emptyEvent});
+Object.assign(window,{CalendarView,calNav,CAL_VIEWS,emptyEvent,msList});
 </script>
-<script type="text/babel">/* 지식 관리: 폴더/태그 트리 · 마크다운 편집+미리보기 · 위키링크/백링크 · 그래프 · 검색 · Claude */
+<script type="text/babel">/* 지식 관리: 업무/개인 · 마크다운 편집+미리보기 · 위키링크/백링크 · 그래프 · 검색 · Claude */
+const SCOPES=['work','personal'];
+const SCOPE_LABEL={work:'업무',personal:'개인'};
+const SCOPE_COLOR={work:'#4E82AE',personal:'#0a6b3b'};
 function kbNav(st,set,db){
-  const folders=[...new Set(db.notes.map(n=>n.folder||''))].sort();const tags=[...new Set(db.notes.flatMap(n=>n.tags||[]))].sort();
+  const tags=[...new Set(db.notes.flatMap(n=>n.tags||[]))].sort();
   return [{label:'보기',items:[{id:'notes',num:'①',label:'노트'},{id:'graph',num:'②',label:'그래프'},{id:'search',num:'③',label:'검색'}],value:st.view,onChange:v=>set({view:v})},
-    {label:'폴더',items:[{id:'*',label:'📁 전체 · '+db.notes.length},...folders.map(f=>({id:'f:'+f,label:'📁 '+(f||'(루트)')+' · '+db.notes.filter(n=>(n.folder||'')===f).length}))],value:st.scope,onChange:v=>set({scope:v,view:'notes'})},
-    {label:'태그',items:tags.map(t=>({id:'t:'+t,label:'# '+t})),value:st.scope,onChange:v=>set({scope:v,view:'notes'})}];
+    {label:'태그',items:[{id:'',label:'# 전체 · '+db.notes.length},...tags.map(t=>({id:t,label:'# '+t+' · '+db.notes.filter(n=>(n.tags||[]).includes(t)).length}))],value:st.tag||'',onChange:v=>set({tag:v,view:'notes'})}];
 }
-const inScope=(n,scope)=>scope==='*'||(scope.startsWith('f:')&&(n.folder||'')===scope.slice(2))||(scope.startsWith('t:')&&(n.tags||[]).includes(scope.slice(2)));
 const NOTE_TEMPLATE=t=>'# '+t+'\n\n한 줄 정의: \n\n## 핵심\n- \n\n## 관련\n- [[홈]]\n\n## 출처\n- \n';
-const newNote=(title,folder,md,tags)=>({id:uid(),title:title||'제목 없음',folder:folder||'',tags:tags||[],updated:nowStamp(),md:md||NOTE_TEMPLATE(title||'제목 없음')});
+const newNote=(title,scope,md,tags)=>({id:uid(),title:title||'제목 없음',scope:scope||'work',tags:tags||[],updated:nowStamp(),md:md||NOTE_TEMPLATE(title||'제목 없음')});
 const RAW_HEAD='## 원문 메모';
 const splitRaw=md=>{const i=md.indexOf('\n'+RAW_HEAD);return i<0?[md,'',0]:[md.slice(0,i),md.slice(i+1),md.slice(0,i+1).split('\n').length-1];};
 const MD_HELP=[['# 제목','첫 줄의 # 이 노트 제목이 됨'],['## 소제목','H2 · ### 은 H3'],['- 항목','불릿 목록 · 1. 은 번호 목록'],['- [ ] 할 일','체크박스 · 읽기 모드에서 클릭 토글'],['**굵게** *기울임*','강조'],['`코드`','인라인 코드 · ``` 로 블록'],['> 인용','인용문'],['| 표 | 표 |','2번째 줄에 |---|---| 필요'],['[[노트 제목]]','위키링크 · 없는 노트는 클릭 시 생성'],['[[제목|표시 이름]]','다른 이름으로 표시'],['[텍스트](https://…)','외부 링크']];
+/* 본문에 [[제목]] 추가 — "## 관련" 절이 있으면 그 아래에 */
+function addWikiLink(md,title){
+  if(wikiLinks(md).includes(title))return md;
+  const L=md.split('\n');const i=L.findIndex(l=>/^##\s*관련/.test(l));
+  if(i>=0){let j=i+1;while(j<L.length&&!/^##\s/.test(L[j]))j++;while(j>i+1&&!L[j-1].trim())j--;L.splice(j,0,'- [['+title+']]');return L.join('\n');}
+  return md.replace(/\s*$/,'')+'\n\n## 관련\n- [['+title+']]\n';
+}
+/* 본문에서 [[제목]] 제거 — 그 링크만 있는 줄이면 줄째 삭제, 아니면 표시 텍스트만 남김 */
+function removeWikiLink(md,title){
+  const esc=title.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  let out=md.replace(new RegExp('^[ \\t]*[-*][ \\t]*\\[\\['+esc+'(\\|[^\\]]*)?\\]\\][ \\t]*$\\n?','gm'),'');
+  out=out.replace(new RegExp('\\[\\['+esc+'(?:\\|([^\\]]*))?\\]\\]','g'),(m,alias)=>alias||title);
+  return out.replace(/\n{3,}/g,'\n\n');
+}
+/* 상단 업무/개인 체크박스 */
+function ScopeToggle({scopes,onChange}){
+  return <span style={{display:'inline-flex',gap:10,alignItems:'center'}}>
+    {SCOPES.map(c=><label key={c} style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:'var(--fs-sm2)',cursor:'pointer',color:scopes[c]?'var(--text-body)':'var(--text-label)'}}>
+      <input type="checkbox" checked={!!scopes[c]} onChange={()=>onChange({...scopes,[c]:!scopes[c]})} style={{accentColor:SCOPE_COLOR[c],margin:0}}/>
+      <span style={{width:8,height:8,borderRadius:4,background:scopes[c]?SCOPE_COLOR[c]:'var(--border-strong)',display:'inline-block'}}></span>{SCOPE_LABEL[c]}</label>)}
+  </span>;
+}
 
 function KnowledgeView({db,setDb,st,set,toast}){
-  const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const {Card,Button,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const notes=db.notes;const cur=notes.find(n=>n.id===st.sel)||null;
+  const scopes=st.scopes||{work:true,personal:true};const tag=st.tag||'';
+  const picked=st.picked||[];
   const upd=(id,patch)=>setDb('notes',notes.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
-  const openByTitle=t=>{const n=notes.find(x=>x.title===t);if(n){set({sel:n.id,view:'notes'});return;}const nn=newNote(t,cur?cur.folder:'');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes'});toast('새 노트 생성 · '+t);};
-  const create=()=>{const nn=newNote('제목 없음',st.scope.startsWith('f:')?st.scope.slice(2):'');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes',mode:'edit'});};
+  const openByTitle=t=>{const n=notes.find(x=>x.title===t);if(n){set({sel:n.id,view:'notes'});return;}const nn=newNote(t,cur?cur.scope:'work');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes'});toast('새 노트 생성 · '+t);};
+  const create=()=>{const nn=newNote('제목 없음',scopes.work?'work':'personal');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes',mode:'edit'});};
   const backlinks=cur?notes.filter(n=>n.id!==cur.id&&wikiLinks(n.md).includes(cur.title)):[];
   const exportMd=()=>{if(!cur)return;const blob=new Blob([cur.md],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=cur.title.replace(/[\\/:*?"<>|]/g,'_')+'.md';a.click();};
-  const exportAll=()=>{const txt=notes.map(n=>'<!-- file: '+(n.folder?n.folder+'/':'')+n.title+'.md | tags: '+(n.tags||[]).join(',')+' -->\n'+n.md).join('\n\n');const blob=new Blob([txt],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pms-vault.md';a.click();toast('전체 노트 내보내기');};
-  const importMd=async fs=>{const add=[];for(const f of fs){const md=await f.text();const t=(/^#\s+(.*)/m.exec(md)||[])[1]||f.name.replace(/\.md$/,'');add.push(newNote(t,st.scope.startsWith('f:')?st.scope.slice(2):'',md));}setDb('notes',[...notes,...add]);toast(add.length+'개 노트 가져옴');};
+  const exportAll=()=>{const txt=notes.map(n=>'<!-- file: '+SCOPE_LABEL[n.scope||'work']+'/'+n.title+'.md | tags: '+(n.tags||[]).join(',')+' -->\n'+n.md).join('\n\n');const blob=new Blob([txt],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pms-vault.md';a.click();toast('전체 노트 내보내기');};
+  const importMd=async fs=>{const add=[];for(const f of fs){const md=await f.text();const t=(/^#\s+(.*)/m.exec(md)||[])[1]||f.name.replace(/\.md$/,'');add.push(newNote(t,scopes.work?'work':'personal',md));}setDb('notes',[...notes,...add]);toast(add.length+'개 노트 가져옴');};
+  /* 그래프에서 연결 추가/해제 */
+  const linkNotes=(fromId,toId)=>{const a=notes.find(n=>n.id===fromId),b=notes.find(n=>n.id===toId);if(!a||!b||a.id===b.id)return;
+    if(wikiLinks(a.md).includes(b.title)){toast('이미 연결됨');return;}
+    upd(a.id,{md:addWikiLink(a.md,b.title)});toast('연결 · '+a.title+' → '+b.title);};
+  const unlinkNotes=(fromId,toId)=>{const a=notes.find(n=>n.id===fromId),b=notes.find(n=>n.id===toId);if(!a||!b)return;
+    upd(a.id,{md:removeWikiLink(a.md,b.title)});toast('연결 해제 · '+a.title+' → '+b.title);};
   const ai=async kind=>{if(!cur)return;set({aiBusy:true});
     const [main,raw]=splitRaw(cur.md);const src=main; /* 이미 정돈된 노트면 원문 섹션은 건드리지 않고 본문만 다시 정돈 */
     const p=kind==='summary'?'다음 마크다운 노트를 한국어로 3~5줄 요약해줘. 결과는 마크다운 불릿만:\n\n'+cur.md
@@ -36416,25 +36562,55 @@ function KnowledgeView({db,setDb,st,set,toast}){
         const md=wiki+'\n\n'+RAW_HEAD+'\n'+rawBody+'\n';
         upd(cur.id,{md,title:(/^#\s+(.*)/m.exec(wiki)||[])[1]||cur.title,tags:[...new Set([...(cur.tags||[]),'정돈됨'])]});}
       toast('Claude 완료');}catch(e){toast('⚠ '+e.message);}set({aiBusy:false});};
-  const list=notes.filter(n=>inScope(n,st.scope)).sort((a,b)=>b.updated.localeCompare(a.updated));
-  const scopeLabel=st.scope==='*'?'전체':st.scope.startsWith('f:')?'📁 '+(st.scope.slice(2)||'(루트)'):'# '+st.scope.slice(2);
-  if(st.view==='graph')return <Card title="그래프 · 노트 연결" badge={<Badge tone="muted">{notes.length} 노드</Badge>} toolbar={<Button variant="gray" size="sm" onClick={()=>set({view:'notes'})}>← 노트로</Button>}><GraphView notes={notes} sel={st.sel} onPick={id=>set({sel:id,view:'notes'})}/></Card>;
+  const inView=n=>scopes[n.scope||'work']&&(!tag||(n.tags||[]).includes(tag));
+  const visible=notes.filter(inView);
+  const list=visible.slice().sort((a,b)=>b.updated.localeCompare(a.updated));
+  /* 일괄 선택 */
+  const toggle=id=>set({picked:picked.includes(id)?picked.filter(x=>x!==id):[...picked,id]});
+  const allOn=list.length>0&&list.every(n=>picked.includes(n.id));
+  const bulkDelete=()=>{setDb('notes',notes.filter(n=>!picked.includes(n.id)));set({picked:[],sel:picked.includes(st.sel)?null:st.sel});toast(picked.length+'개 삭제됨');};
+  const bulkScope=sc=>{setDb('notes',notes.map(n=>picked.includes(n.id)?{...n,scope:sc,updated:nowStamp()}:n));set({picked:[]});toast(picked.length+'개 → '+SCOPE_LABEL[sc]);};
+  const bulkTag=()=>{const t=prompt('추가할 태그 (쉼표로 여러 개)');if(!t)return;const add=t.split(',').map(x=>x.trim().replace(/^#/,'')).filter(Boolean);
+    setDb('notes',notes.map(n=>picked.includes(n.id)?{...n,tags:[...new Set([...(n.tags||[]),...add])],updated:nowStamp()}:n));set({picked:[]});toast('태그 추가됨');};
+
+  if(st.view==='graph')return <Card title="그래프 · 노트 연결" badge={<Badge tone="muted">{visible.length} 노드</Badge>}
+      toolbar={<Button variant="gray" size="sm" onClick={()=>set({view:'notes'})}>← 노트로</Button>}
+      toolbarRight={<ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>}>
+      <GraphView notes={visible} sel={st.sel} onPick={id=>set({sel:id})} onOpen={id=>set({sel:id,view:'notes'})} onLink={linkNotes} onUnlink={unlinkNotes} onWiki={openByTitle}/>
+    </Card>;
   if(st.view==='search')return <SearchView notes={notes} onPick={id=>set({sel:id,view:'notes'})}/>;
   const mode=st.mode||'split';
-  return <Card title={'노트 ▸ '+scopeLabel} badge={<Badge tone="muted">{list.length}개</Badge>}
+  return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
     toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>document.getElementById('mdImport').click()}>.md 가져오기</Button><input id="mdImport" type="file" accept=".md,.txt" multiple style={{display:'none'}} onChange={e=>importMd([...e.target.files])}/>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span></>}
-    toolbarRight={<><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📥" onClick={exportAll}>전체</Button></>}>
-    <div style={{display:'grid',gridTemplateColumns:'240px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
-      <div style={{borderRight:'1px solid var(--border-default)',overflowY:'auto',maxHeight:'calc(100vh - 262px)'}}>{list.map(n=><NoteRow key={n.id} n={n} on={n.id===st.sel} onClick={()=>set({sel:n.id})}/>)}{!list.length&&<div style={{padding:20,color:'var(--text-label)',textAlign:'center'}}>노트 없음</div>}</div>
-      {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>노트를 선택하거나 새로 만드세요</div>:<NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{setDb('notes',notes.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} folders={[...new Set(notes.map(x=>x.folder||''))]} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/>}
+    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📥" onClick={exportAll}>전체</Button></>}>
+    {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
+      <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
+      <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
+      <Button variant="gray" size="xs" onClick={()=>bulkScope('personal')}>→ 개인</Button>
+      <Button variant="gray" size="xs" onClick={bulkTag}># 태그 추가</Button>
+      <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
+      <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
+    <div style={{display:'grid',gridTemplateColumns:'250px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
+      <div style={{borderRight:'1px solid var(--border-default)',overflowY:'auto',maxHeight:'calc(100vh - 262px)'}}>
+        <label style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-label)',background:'var(--surface-hover)',cursor:'pointer'}}>
+          <input type="checkbox" checked={allOn} onChange={()=>set({picked:allOn?[]:list.map(n=>n.id)})}/>전체 선택</label>
+        {list.map(n=><NoteRow key={n.id} n={n} on={n.id===st.sel} picked={picked.includes(n.id)} onPick={()=>toggle(n.id)} onClick={()=>set({sel:n.id})}/>)}
+        {!list.length&&<div style={{padding:20,color:'var(--text-label)',textAlign:'center'}}>노트 없음</div>}</div>
+      {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>노트를 선택하거나 새로 만드세요</div>:<NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{setDb('notes',notes.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/>}
     </div>
   </Card>;
 }
-function NoteRow({n,on,onClick}){const [h,setH]=React.useState(false);return <div onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{padding:'8px 12px',borderBottom:'1px solid var(--border-default)',background:on?'var(--surface-active)':h?'var(--surface-hover)':'#fff',cursor:'pointer'}}>
-  <div style={{fontWeight:on?600:500,fontSize:'var(--fs-md)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📄 {n.title}</div>
-  <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',display:'flex',gap:6,marginTop:2}}><span>{n.folder||'루트'}</span><span style={{fontFamily:'var(--font-num)'}}>{n.updated.slice(5,16).replace('T',' ')}</span>{(n.tags||[]).slice(0,2).map(t=><span key={t} style={{color:'var(--color-accent)'}}>#{t}</span>)}</div></div>;}
-function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,folders,titles=[],allTags=[]}){
+function NoteRow({n,on,picked,onPick,onClick}){const [h,setH]=React.useState(false);const sc=n.scope||'work';
+  return <div onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{display:'grid',gridTemplateColumns:'24px 1fr',alignItems:'start',gap:2,padding:'8px 12px 8px 8px',borderBottom:'1px solid var(--border-default)',background:on?'var(--surface-active)':h?'var(--surface-hover)':'#fff'}}>
+  <input type="checkbox" checked={!!picked} onChange={onPick} style={{marginTop:3}}/>
+  <div onClick={onClick} style={{cursor:'pointer',minWidth:0}}>
+    <div style={{fontWeight:on?600:500,fontSize:'var(--fs-md)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>📄 {n.title}</div>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',display:'flex',gap:6,marginTop:2,flexWrap:'wrap'}}>
+      <span style={{color:SCOPE_COLOR[sc]}}>● {SCOPE_LABEL[sc]}</span>
+      <span style={{fontFamily:'var(--font-num)'}}>{n.updated.slice(5,16).replace('T',' ')}</span>
+      {(n.tags||[]).slice(0,2).map(t=><span key={t} style={{color:'var(--color-accent)'}}>#{t}</span>)}</div></div></div>;}
+function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,titles=[],allTags=[]}){
   const {Button}=window.HDWorkbookDesignSystem_ad60e4;const [md,setMd]=React.useState(n.md);const tRef=React.useRef();
   const [ac,setAc]=React.useState(null);const [help,setHelp]=React.useState(false);
   React.useEffect(()=>{setMd(m=>m===n.md?m:n.md);},[n.md]); /* 외부 변경(위키 정돈·요약·체크박스)을 편집기에 반영 */
@@ -36451,7 +36627,7 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,folders,titles=
   const bare={border:'none',background:'transparent',fontFamily:'var(--font-sans)',color:'var(--text-body)',outline:'none'};
   return <div style={{display:'flex',flexDirection:'column',minWidth:0}}>
     <div style={{display:'flex',gap:8,alignItems:'center',padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-muted)',flexWrap:'wrap'}}>
-      <span>📁</span><input list="pmsFolders" value={n.folder} onChange={e=>upd(n.id,{folder:e.target.value})} placeholder="폴더" style={{...bare,width:110,fontSize:'var(--fs-sm)',borderBottom:'1px dashed var(--border-strong)'}}/><datalist id="pmsFolders">{folders.map(f=><option key={f} value={f}/>)}</datalist>
+      <span style={{display:'inline-flex',gap:3}}>{SCOPES.map(c=><Chip key={c} on={(n.scope||'work')===c} color={SCOPE_COLOR[c]} onClick={()=>upd(n.id,{scope:c})}>● {SCOPE_LABEL[c]}</Chip>)}</span>
       <span>#</span><input value={(n.tags||[]).join(', ')} onChange={e=>upd(n.id,{tags:e.target.value.split(',').map(s=>s.trim()).filter(Boolean)})} placeholder="태그, 쉼표 구분" style={{...bare,flex:1,minWidth:120,fontSize:'var(--fs-sm)',borderBottom:'1px dashed var(--border-strong)'}}/>
       {showEd&&<span style={{display:'flex',gap:2}}>{[['**','B'],['*','I'],['`','`'],['- [ ] ','☐',''],['## ','H2','']].map(([a,l,b])=><Button key={l} variant="ghost" size="xs" onClick={()=>wrap(a,b)}>{l}</Button>)}<Button variant="ghost" size="xs" title="노트 링크 삽입" onClick={()=>{const t=tRef.current;if(!t)return;const s0=t.selectionStart;const v=md.slice(0,s0)+'[['+md.slice(t.selectionEnd);setMd(v);setTimeout(()=>{t.focus();t.setSelectionRange(s0+2,s0+2);setAc(detect(v,s0+2));});}}>[[ ]]</Button><Button variant="ghost" size="xs" title="마크다운 문법" onClick={()=>setHelp(h=>!h)}>?</Button></span>}
       <Button variant="ghost" size="xs" onClick={onDelete}>🗑</Button>
@@ -36486,28 +36662,124 @@ function SearchView({notes,onPick}){
   const hl=s=>{const i=s.toLowerCase().indexOf(q.toLowerCase());return i<0?s:<>{s.slice(0,i)}<mark style={{background:'var(--wb-yellow-hl)'}}>{s.slice(i,i+q.length)}</mark>{s.slice(i+q.length)}</>;};
   return <Card title="전문 검색" badge={q&&<Badge tone="muted">{hits.length}개 노트</Badge>}>
     <TextInput autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·본문 검색" style={{fontSize:15,padding:'8px 12px',marginBottom:12}}/>
-    {hits.map(h=><div key={h.n.id} onClick={()=>onPick(h.n.id)} style={{padding:'10px 12px',border:'1px solid var(--border-default)',marginBottom:6,cursor:'pointer',borderRadius:4}}><div style={{fontWeight:600,fontSize:'var(--fs-md)'}}>📄 {hl(h.n.title)} <span style={{color:'var(--text-label)',fontWeight:400,fontSize:'var(--fs-sm)'}}>{h.n.folder||'루트'}</span></div>{h.ls.map(([l,i])=><div key={i} style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginTop:3,fontFamily:'var(--font-mono)',fontSize:12}}><span style={{color:'var(--text-label)',marginRight:8}}>{i+1}</span>{hl(l)}</div>)}</div>)}
+    {hits.map(h=><div key={h.n.id} onClick={()=>onPick(h.n.id)} style={{padding:'10px 12px',border:'1px solid var(--border-default)',marginBottom:6,cursor:'pointer',borderRadius:4}}><div style={{fontWeight:600,fontSize:'var(--fs-md)'}}>📄 {hl(h.n.title)} <span style={{color:SCOPE_COLOR[h.n.scope||'work'],fontWeight:400,fontSize:'var(--fs-sm)'}}>● {SCOPE_LABEL[h.n.scope||'work']}</span></div>{h.ls.map(([l,i])=><div key={i} style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginTop:3,fontFamily:'var(--font-mono)',fontSize:12}}><span style={{color:'var(--text-label)',marginRight:8}}>{i+1}</span>{hl(l)}</div>)}</div>)}
     {q&&!hits.length&&<div style={{color:'var(--text-label)',padding:20,textAlign:'center'}}>결과 없음</div>}
   </Card>;
 }
-/* 그래프: 간단한 force layout canvas */
-function GraphView({notes,sel,onPick}){
-  const ref=React.useRef();const nodesRef=React.useRef([]);
-  React.useEffect(()=>{const cv=ref.current;const W=cv.width=cv.clientWidth,H=cv.height=520;const ctx=cv.getContext('2d');
-    const idx=Object.fromEntries(notes.map((n,i)=>[n.title,i]));const nodes=notes.map((n,i)=>({n,x:W/2+Math.cos(i)*120+Math.random()*40,y:H/2+Math.sin(i)*120+Math.random()*40,vx:0,vy:0}));const edges=[];notes.forEach((n,i)=>wikiLinks(n.md).forEach(t=>{if(idx[t]!=null)edges.push([i,idx[t]]);}));const deg=nodes.map((_,i)=>edges.filter(e=>e[0]===i||e[1]===i).length);nodesRef.current=nodes;
-    let t=0,raf;const step=()=>{for(let i=0;i<nodes.length;i++)for(let j=i+1;j<nodes.length;j++){const a=nodes[i],b=nodes[j];let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;const f=1800/(d*d);a.vx-=dx/d*f;a.vy-=dy/d*f;b.vx+=dx/d*f;b.vy+=dy/d*f;}
-      edges.forEach(([i,j])=>{const a=nodes[i],b=nodes[j];const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;const f=(d-110)*0.02;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;});
-      nodes.forEach(n=>{n.vx+=(W/2-n.x)*0.002;n.vy+=(H/2-n.y)*0.002;n.vx*=0.85;n.vy*=0.85;n.x=Math.max(30,Math.min(W-30,n.x+n.vx));n.y=Math.max(20,Math.min(H-20,n.y+n.vy));});
-      ctx.clearRect(0,0,W,H);ctx.strokeStyle='#D5DCE4';ctx.lineWidth=1;edges.forEach(([i,j])=>{ctx.beginPath();ctx.moveTo(nodes[i].x,nodes[i].y);ctx.lineTo(nodes[j].x,nodes[j].y);ctx.stroke();});
-      nodes.forEach((n,i)=>{const r=6+deg[i]*2;ctx.beginPath();ctx.arc(n.x,n.y,r,0,7);ctx.fillStyle=n.n.id===sel?'#244A70':n.n.folder==='개인'?'#0a6b3b':'#4E82AE';ctx.fill();ctx.fillStyle='#37352F';ctx.font='12px "Noto Sans KR",sans-serif';ctx.textAlign='center';ctx.fillText(n.n.title,n.x,n.y+r+13);});
-      if(t++<300)raf=requestAnimationFrame(step);};step();return()=>cancelAnimationFrame(raf);},[notes,sel]);
-  const click=e=>{const r=ref.current.getBoundingClientRect();const x=e.clientX-r.left,y=e.clientY-r.top;const hit=nodesRef.current.find(n=>Math.hypot(n.x-x,n.y-y)<14);if(hit)onPick(hit.n.id);};
-  return <div><canvas ref={ref} onClick={click} style={{width:'100%',height:520,border:'1px solid var(--border-default)',background:'var(--surface-drop)',cursor:'pointer',display:'block'}}/><div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6}}>● 업무 · <span style={{color:'#0a6b3b'}}>●</span> 개인 · 원 크기 = 연결 수 · 클릭하면 노트 열기</div></div>;
+/* 그래프: 드래그로 재배치 · 휠 확대 · 배경 드래그 이동 · Shift+드래그로 연결 · 간선 클릭으로 해제 */
+function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
+  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const cvRef=React.useRef();const P=React.useRef({});const V=React.useRef({x:0,y:0,k:1});
+  const S=React.useRef({mode:null,node:null,from:null,mx:0,my:0,moved:false});
+  const [tick,setTick]=React.useState(0);const [hint,setHint]=React.useState('');
+  const cur=notes.find(n=>n.id===sel)||null;
+  const idxByTitle={};notes.forEach(n=>{idxByTitle[n.title]=n.id;});
+  const edges=[];notes.forEach(n=>wikiLinks(n.md).forEach(t=>{const to=idxByTitle[t];if(to&&to!==n.id)edges.push({from:n.id,to});}));
+  const deg={};edges.forEach(e=>{deg[e.from]=(deg[e.from]||0)+1;deg[e.to]=(deg[e.to]||0)+1;});
+  const dataKey=notes.map(n=>n.id).join(',')+'|'+edges.map(e=>e.from+'>'+e.to).join(',');
+
+  React.useEffect(()=>{
+    const cv=cvRef.current;if(!cv)return;
+    const W=()=>cv.width=cv.clientWidth, H=()=>cv.height=cv.clientHeight;
+    W();H();
+    notes.forEach((n,i)=>{if(!P.current[n.id])P.current[n.id]={x:cv.width/2+Math.cos(i*2.4)*(90+i*7),y:cv.height/2+Math.sin(i*2.4)*(90+i*7),vx:0,vy:0,fx:null,fy:null};});
+    Object.keys(P.current).forEach(id=>{if(!notes.some(n=>n.id===id))delete P.current[id];});
+    let alpha=1,raf;window.__pmsGraphPos=P.current;window.__pmsGraphView=V.current; /* 디버그·테스트용 위치 노출 */
+    const ctx=cv.getContext('2d');
+    const step=()=>{
+      const cw=cv.width,ch=cv.height;const arr=notes.map(n=>P.current[n.id]);
+      if(alpha>0.005){
+        for(let i=0;i<arr.length;i++)for(let j=i+1;j<arr.length;j++){const a=arr[i],b=arr[j];let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;const f=Math.min(30,3200/(d*d))*alpha;a.vx-=dx/d*f;a.vy-=dy/d*f;b.vx+=dx/d*f;b.vy+=dy/d*f;}
+        edges.forEach(e=>{const a=P.current[e.from],b=P.current[e.to];if(!a||!b)return;const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy)||1;const f=(d-125)*0.03*alpha;a.vx+=dx/d*f;a.vy+=dy/d*f;b.vx-=dx/d*f;b.vy-=dy/d*f;});
+        arr.forEach(n=>{n.vx+=(cw/2-n.x)*0.0016*alpha;n.vy+=(ch/2-n.y)*0.0016*alpha;});
+        alpha*=0.985;
+      }
+      arr.forEach(n=>{if(n.fx!=null){n.x=n.fx;n.y=n.fy;n.vx=n.vy=0;return;}n.vx*=0.82;n.vy*=0.82;n.x+=n.vx;n.y+=n.vy;});
+      const {x:tx,y:ty,k}=V.current;
+      ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,cw,ch);
+      ctx.setTransform(k,0,0,k,tx,ty);
+      /* 간선 */
+      edges.forEach(e=>{const a=P.current[e.from],b=P.current[e.to];if(!a||!b)return;
+        const hl=sel&&(e.from===sel||e.to===sel);
+        ctx.strokeStyle=hl?'#4E82AE':'#D5DCE4';ctx.lineWidth=hl?1.6/k:1/k;
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+        /* 방향 화살표 */
+        const ang=Math.atan2(b.y-a.y,b.x-a.x);const r=7+(deg[e.to]||0)*1.6;const ex=b.x-Math.cos(ang)*r,ey=b.y-Math.sin(ang)*r;
+        ctx.fillStyle=hl?'#4E82AE':'#C4C4C0';ctx.beginPath();
+        ctx.moveTo(ex,ey);ctx.lineTo(ex-Math.cos(ang-0.4)*7/k,ey-Math.sin(ang-0.4)*7/k);ctx.lineTo(ex-Math.cos(ang+0.4)*7/k,ey-Math.sin(ang+0.4)*7/k);ctx.closePath();ctx.fill();});
+      /* 연결 중 안내선 */
+      if(S.current.mode==='link'&&S.current.from){const a=P.current[S.current.from];const mx=(S.current.mx-tx)/k,my=(S.current.my-ty)/k;
+        ctx.strokeStyle='#244A70';ctx.lineWidth=1.6/k;ctx.setLineDash([5/k,4/k]);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(mx,my);ctx.stroke();ctx.setLineDash([]);}
+      /* 노드 */
+      notes.forEach(n=>{const p=P.current[n.id];if(!p)return;const r=7+(deg[n.id]||0)*1.6;
+        ctx.beginPath();ctx.arc(p.x,p.y,r,0,7);
+        ctx.fillStyle=n.id===sel?'#244A70':SCOPE_COLOR[n.scope||'work'];ctx.fill();
+        if(p.fx!=null){ctx.strokeStyle='#37352F';ctx.lineWidth=1.4/k;ctx.stroke();}
+        ctx.fillStyle='#37352F';ctx.font=(n.id===sel?'600 ':'')+(12/Math.max(k,.7))+'px "Noto Sans KR",sans-serif';ctx.textAlign='center';
+        ctx.fillText(n.title.length>18?n.title.slice(0,17)+'…':n.title,p.x,p.y+r+13/Math.max(k,.7));});
+      raf=requestAnimationFrame(step);
+    };
+    step();
+    const ro=new ResizeObserver(()=>{W();H();});ro.observe(cv);
+    return ()=>{cancelAnimationFrame(raf);ro.disconnect();};
+  },[dataKey,sel,tick]);
+
+  const toWorld=(cx,cy)=>{const {x,y,k}=V.current;return [(cx-x)/k,(cy-y)/k];};
+  const hitNode=(cx,cy)=>{const [wx,wy]=toWorld(cx,cy);let best=null,bd=1e9;
+    notes.forEach(n=>{const p=P.current[n.id];if(!p)return;const r=7+(deg[n.id]||0)*1.6+6;const d=Math.hypot(p.x-wx,p.y-wy);if(d<r&&d<bd){bd=d;best=n.id;}});return best;};
+  const hitEdge=(cx,cy)=>{const [wx,wy]=toWorld(cx,cy);let best=null,bd=8/V.current.k;
+    edges.forEach(e=>{const a=P.current[e.from],b=P.current[e.to];if(!a||!b)return;
+      const dx=b.x-a.x,dy=b.y-a.y,L2=dx*dx+dy*dy||1;let t=((wx-a.x)*dx+(wy-a.y)*dy)/L2;t=Math.max(.15,Math.min(.85,t));
+      const px=a.x+t*dx,py=a.y+t*dy;const d=Math.hypot(px-wx,py-wy);if(d<bd){bd=d;best=e;}});return best;};
+  const pos=ev=>{const r=cvRef.current.getBoundingClientRect();return [ev.clientX-r.left,ev.clientY-r.top];};
+
+  const onDown=ev=>{const [cx,cy]=pos(ev);const id=hitNode(cx,cy);S.current.moved=false;S.current.mx=cx;S.current.my=cy;
+    if(id&&ev.shiftKey){S.current.mode='link';S.current.from=id;setHint('연결할 노트 위에서 놓으세요');return;}
+    if(id){S.current.mode='node';S.current.node=id;const p=P.current[id];p.fx=p.x;p.fy=p.y;return;}
+    S.current.mode='pan';};
+  const onMove=ev=>{if(!S.current.mode)return;const [cx,cy]=pos(ev);const dx=cx-S.current.mx,dy=cy-S.current.my;
+    if(Math.abs(dx)>2||Math.abs(dy)>2)S.current.moved=true;
+    if(S.current.mode==='node'){const p=P.current[S.current.node];p.fx+=dx/V.current.k;p.fy+=dy/V.current.k;}
+    else if(S.current.mode==='pan'){V.current.x+=dx;V.current.y+=dy;}
+    S.current.mx=cx;S.current.my=cy;};
+  const onUp=ev=>{const m=S.current.mode;const [cx,cy]=pos(ev);
+    if(m==='link'){const to=hitNode(cx,cy);if(to&&to!==S.current.from)onLink(S.current.from,to);setHint('');}
+    else if(m==='node'&&!S.current.moved){onPick(S.current.node);}
+    else if(m==='pan'&&!S.current.moved){const e=hitEdge(cx,cy);
+      if(e){const a=notes.find(n=>n.id===e.from),b=notes.find(n=>n.id===e.to);
+        if(window.confirm('연결을 끊을까요?\n\n'+a.title+' → '+b.title))onUnlink(e.from,e.to);}}
+    S.current.mode=null;S.current.node=null;S.current.from=null;setTick(t=>t+1);};
+  const onWheel=ev=>{ev.preventDefault();const [cx,cy]=pos(ev);const {x,y,k}=V.current;
+    const nk=Math.max(.35,Math.min(2.6,k*(ev.deltaY<0?1.12:1/1.12)));
+    V.current={k:nk,x:cx-(cx-x)*nk/k,y:cy-(cy-y)*nk/k};};
+  const reset=()=>{Object.values(P.current).forEach(p=>{p.fx=null;p.fy=null;});V.current={x:0,y:0,k:1};setTick(t=>t+1);};
+
+  return <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 330px',gap:10,alignItems:'stretch'}}>
+    <div>
+      <canvas ref={cvRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp} onWheel={onWheel}
+        style={{width:'100%',height:560,border:'1px solid var(--border-default)',background:'var(--surface-drop)',cursor:S.current.mode==='pan'?'grabbing':'default',display:'block'}}/>
+      <div style={{display:'flex',alignItems:'center',gap:10,fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,flexWrap:'wrap'}}>
+        <span><span style={{color:SCOPE_COLOR.work}}>●</span> 업무 · <span style={{color:SCOPE_COLOR.personal}}>●</span> 개인 · 원 크기 = 연결 수</span>
+        <span>드래그 = 위치 고정 · <b>Shift+드래그 = 연결</b> · 선 클릭 = 연결 해제 · 휠 = 확대 · 배경 드래그 = 이동</span>
+        {hint&&<b style={{color:'var(--color-accent)'}}>{hint}</b>}
+        <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={reset}>배치 초기화</Button>
+      </div>
+    </div>
+    <div style={{border:'1px solid var(--border-default)',padding:'12px 14px',overflowY:'auto',maxHeight:590,background:'#fff'}}>
+      {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,fontSize:'var(--fs-base)'}}>노드를 클릭하면 노트가 여기에 열립니다</div>
+      :<><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8,paddingBottom:8,borderBottom:'1px solid var(--border-default)'}}>
+          <span style={{color:SCOPE_COLOR[cur.scope||'work'],fontSize:'var(--fs-sm)'}}>● {SCOPE_LABEL[cur.scope||'work']}</span>
+          <span style={{marginLeft:'auto'}}><Button variant="gray" size="xs" onClick={()=>onOpen(cur.id)}>노트에서 열기</Button></span></div>
+        <div style={{fontSize:'var(--fs-sm)'}}><Markdown md={splitRaw(cur.md)[0]} onWiki={onWiki}/></div>
+        <div style={{marginTop:12,paddingTop:8,borderTop:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>
+          <b>🔗 나가는 링크</b> {edges.filter(e=>e.from===cur.id).length} · <b>↩ 백링크</b> {edges.filter(e=>e.to===cur.id).length}</div></>}
+    </div>
+  </div>;
 }
-Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw});
+Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v1.7';
+const APP_VERSION='v2.0';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
@@ -36520,13 +36792,13 @@ function Shell({user,onLogout}){
   const NS=window.HDWorkbookDesignSystem_ad60e4;const {AppHeader,SessionBar,SessionDivider,ZoneSegment,NavSidebar,Button,Badge,Toast,InfoBar}=NS;
   const [db,setDbRaw]=React.useState(null);const [zone,setZone]=React.useState(localStorage.getItem('pms.zone')||'mail');
   const [saved,setSaved]=React.useState('');const [toastMsg,setToastMsg]=React.useState('');const [cfgOpen,setCfg]=React.useState(false);const [err,setErr]=React.useState('');
-  const [mailSt,setMailSt]=React.useState({acc:'all',folder:'inbox',sel:null});const [calSt,setCalSt]=React.useState({view:'today',cal:'all',anchor:todayISO()});const [kbSt,setKbSt]=React.useState({view:'notes',scope:'*',sel:null,mode:'split'});
+  const [mailSt,setMailSt]=React.useState({acc:'all',folder:'inbox',sel:null,picked:[]});const [calSt,setCalSt]=React.useState({view:'month',sub:'month',cals:{work:true,personal:true},anchor:todayISO()});const [kbSt,setKbSt]=React.useState({view:'notes',tag:'',scopes:{work:true,personal:true},picked:[],sel:null,mode:'split'});
   const timers=React.useRef({});
   React.useEffect(()=>{Store.loadAll().then(d=>{setDbRaw(d);if(Store.migrated)setTimeout(()=>toast('로컬 데이터를 클라우드로 이관했습니다'),400);}).catch(e=>setErr('데이터 로드 실패: '+e.message+' — 테이블 SQL을 실행했는지 확인하세요'));},[]);
   React.useEffect(()=>localStorage.setItem('pms.zone',zone),[zone]);
   const toast=m=>{setToastMsg(m);clearTimeout(timers.current.t);timers.current.t=setTimeout(()=>setToastMsg(''),1600);};
   const setDb=(kind,arr)=>{setDbRaw(d=>({...d,[kind]:arr}));setSaved('saving');clearTimeout(timers.current[kind]);timers.current[kind]=setTimeout(async()=>{try{await Store.persist(kind,arr);setSaved(new Date().toTimeString().slice(0,8));}catch(e){setSaved('error');toast('⚠ 저장 실패: '+e.message);}},700);};
-  const sendToNote=src=>{const n=newNote(src.subject,'업무',`# ${src.subject}\n\n${src.from?'보낸 사람: '+src.from+'  \n':''}${src.date?'날짜: '+fmtDT(src.date)+'  \n':''}\n${src.body||''}\n\n---\n출처: ${src.from?'메일':'일정'}`);setDb('notes',[...db.notes,n]);setKbSt(s=>({...s,sel:n.id,view:'notes'}));setZone('kb');toast('노트로 저장');};
+  const sendToNote=src=>{const n=newNote(src.subject,'work',`# ${src.subject}\n\n${src.from?'보낸 사람: '+src.from+'  \n':''}${src.date?'날짜: '+fmtDT(src.date)+'  \n':''}\n${src.body||''}\n\n---\n출처: ${src.from?'메일':'일정'}`);setDb('notes',[...db.notes,n]);setKbSt(s=>({...s,sel:n.id,view:'notes'}));setZone('kb');toast('노트로 저장');};
   const sendToEvent=m=>{setCalSt(s=>({...s,edit:{...emptyEvent(todayISO()),title:m.subject,notes:'메일: '+m.from+'\n\n'+m.body.slice(0,300)}}));setZone('cal');};
   if(err)return <div style={{padding:40}}><InfoBar tone="warn">{err}</InfoBar><Button variant="gray" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button><SettingsModal open={cfgOpen} onClose={()=>setCfg(false)} onToast={toast}/></div>;
   if(!db)return <div style={{padding:40,color:'var(--text-label)'}}>데이터 불러오는 중…</div>;
