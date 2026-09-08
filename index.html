@@ -35984,6 +35984,16 @@ Store.transcribe=async function(blob,opt={}){
       : 'Supabase를 연결하거나 설정 › 음성에 OpenAI API 키를 입력하세요');
   }catch(e){throw new Error(explainSttError(e));}
 };
+/* Paraformer(DashScope) — 파일 주소를 넘기고 결과를 기다린다 */
+Store.dashscope=async function(action,payload){
+  if(this.mode!=='supabase')throw new Error('Paraformer는 클라우드 모드에서만 씁니다 — 파일 주소를 넘겨야 하기 때문입니다');
+  const {data,error}=await this.sb.functions.invoke('paraformer',
+    {body:{action,base:this.cfg.dashBase||'',model:this.cfg.dashModel||'paraformer-v2',...payload}});
+  if(error){let d='';try{const j=await error.context?.json();d=j&&j.error;}catch(_){}
+    throw new Error(d||(/Failed to send|FunctionsFetchError/i.test(error.message)?"Edge Function 'paraformer'를 찾지 못했습니다 — 대시보드에 paraformer 이름으로 배포하세요 (가이드 11)":error.message));}
+  if(data&&data.error)throw new Error(data.error);
+  return data;
+};
 async function testStt(){ /* 1초짜리 무음을 보내 연결만 확인 */
   const rate=16000,n=rate;const s=new Float32Array(n);
   for(let i=0;i<n;i++)s[i]=Math.sin(i*0.02)*0.02;
@@ -36329,6 +36339,32 @@ async function transcribeBlob(blob,opt={}){
   }
   return texts.filter(Boolean).join('\n\n');
 }
+/* Paraformer 경로 — 파일을 올리지 않고 1시간짜리 서명 주소만 넘긴다(길이 제한 없음) */
+async function paraformerTranscribe(path,opt={}){
+  const onStep=opt.onStep||(()=>{});
+  onStep('파일 주소 만드는 중…');
+  const url=await Files.url(path);
+  if(!/^https:/.test(url))throw new Error('Paraformer는 클라우드 저장소의 파일만 처리할 수 있습니다(로컬 모드 불가)');
+  onStep('Paraformer에 맡기는 중…');
+  const langs=[(Store.cfg.sttLang&&Store.cfg.sttLang!=='auto')?Store.cfg.sttLang:'zh','en'];
+  const {task_id}=await Store.dashscope('submit',{url,languages:[...new Set(langs)],
+    diarize:!!Store.cfg.dashDiarize});
+  const t0=Date.now();
+  for(let i=0;;i++){
+    await new Promise(r=>setTimeout(r,i<3?3000:5000));
+    const r=await Store.dashscope('query',{task_id});
+    if(r.status==='SUCCEEDED')return (r.text||'').trim();
+    if(r.status==='FAILED')throw new Error('Paraformer 처리 실패 — '+(r.error||''));
+    onStep('받아쓰는 중… '+Math.round((Date.now()-t0)/1000)+'초');
+    if(Date.now()-t0>25*60000)throw new Error('시간이 너무 오래 걸립니다 — 파일을 나눠서 올려보세요');
+  }
+}
+/* 엔진 골라 부르기 */
+async function transcribeAttachment(path,opt={}){
+  return (Store.cfg.sttEngine==='paraformer')
+    ? paraformerTranscribe(path,opt)
+    : transcribeBlob(await Files.blob(path),{...opt,srcName:path});
+}
 /* 노트 본문에서 음성 첨부 찾기 */
 const audioRefs=md=>pmsRefs(md).filter(r=>AUDIO_EXT.test(r.path)||/🎙/.test(r.raw));
 
@@ -36374,7 +36410,7 @@ function RecButton({onDone,onErr}){
     ? <Button variant="danger" size="xs" onClick={stop} title="녹음 정지">■ {mmss(sec)}</Button>
     : <Button variant="ghost" size="xs" onClick={start} title="이 노트에 음성 녹음 (15분마다 자동으로 조각냅니다)">● 녹음</Button>;
 }
-Object.assign(window,{AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,RecButton,mmss,blobB64,SEG_SEC});
+Object.assign(window,{paraformerTranscribe,transcribeAttachment,AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,RecButton,mmss,blobB64,SEG_SEC});
 </script>
 <script type="text/babel">/* Gmail 연동: Google Identity Services(브라우저 OAuth 토큰) + Gmail REST API
    흐름: 연결(승인 창) → 토큰(1시간) → 받은편지함/보낸편지함 가져오기 · 보내기
@@ -36465,7 +36501,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.2'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.3.1'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36565,15 +36601,34 @@ function SttTab({c,setC}){
   const [t,setT]=React.useState(null);const [busy,setBusy]=React.useState(false);
   const cloud=Store.mode==='supabase';const via=c.sttVia||(cloud?'edge':'direct');
   const run=async()=>{setBusy(true);setT(null);const prev=Store.cfg;
-    Store.saveCfg({sttVia:via,sttModel:c.sttModel,openaiKey:c.openaiKey,sttLang:c.sttLang,sttHint:c.sttHint});
+    Store.saveCfg({sttVia:via,sttModel:c.sttModel,openaiKey:c.openaiKey,sttLang:c.sttLang,sttHint:c.sttHint,
+      sttEngine:c.sttEngine,dashBase:c.dashBase,dashModel:c.dashModel,dashDiarize:c.dashDiarize});
     try{setT(await testStt());}catch(e){setT({ok:false,msg:e.message});}
     Store.cfg=prev;localStorage.setItem('pms.cfg',JSON.stringify(prev));setBusy(false);};
   const Radio=({id,label,sub,disabled})=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 10px',border:'1px solid '+(via===id?'var(--color-accent)':'var(--border-default)'),borderRadius:4,marginBottom:6,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1}}>
     <input type="radio" name="sttVia" checked={via===id} disabled={disabled} onChange={()=>setC({...c,sttVia:id})} style={{marginTop:3}}/>
     <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span><div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{sub}</div></span></label>;
+  const engine=c.sttEngine||'openai';
+  const Eng=({id,label,sub})=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 10px',border:'1px solid '+(engine===id?'var(--color-accent)':'var(--border-default)'),borderRadius:4,marginBottom:6,cursor:'pointer'}}>
+    <input type="radio" name="sttEngine" checked={engine===id} onChange={()=>setC({...c,sttEngine:id})} style={{marginTop:3}}/>
+    <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span><div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{sub}</div></span></label>;
   return <>
     <InfoBar>노트에서 <b>● 녹음</b>으로 회의를 녹음하거나 음성 파일을 첨부한 뒤 <b>🎧 전사</b>를 누르면 글로 옮깁니다. OpenAI Whisper를 씁니다 — 1시간 녹음에 약 400원, <b>녹음이 OpenAI 서버로 올라갑니다</b>(회사 자료라면 이 점을 감안하세요).</InfoBar>
     <InfoBar>준비: ① platform.openai.com에서 API 키 발급 · 결제 수단 등록 ② Supabase 대시보드 › Edge Functions에 <code>transcribe</code> 함수 배포(소스 묶음의 supabase/functions/transcribe/index.ts) ③ Edge Functions › Secrets에 <code>OPENAI_API_KEY</code> 추가 — 가이드 11</InfoBar>
+    <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>전사 엔진</div>
+    <Eng id="openai" label="OpenAI (gpt-transcribe)" sub="한국어·영어에 무난합니다. 앱이 파일을 잘라 올립니다"/>
+    <Eng id="paraformer" label="Paraformer · 중국어 특화 (Alibaba)" sub="중국어 정확도가 가장 좋습니다. 파일을 자르지 않고 주소만 넘겨 통째로 처리(12시간·2GB까지). 클라우드 저장소 연결 필수"/>
+    {engine==='paraformer'&&<>
+      <InfoBar>준비: ① <b>modelstudio.console.alibabacloud.com/ap-southeast-1</b>(싱가포르) › API Key › Create — 키와 함께 나오는 <b>API Host</b>도 복사 ② Edge Function <code>paraformer</code> 배포 ③ Supabase Secrets에 <code>DASHSCOPE_API_KEY</code> 추가 ④ 아래 서비스 주소에 API Host 붙여넣기(비워두면 기본 주소). 첨부가 <b>클라우드 저장소</b>에 있어야 합니다(로컬 모드 불가).</InfoBar>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+        <Field label="서비스 주소 (콘솔이 알려주는 API Host)"><TextInput value={c.dashBase||''} onChange={e=>setC({...c,dashBase:e.target.value.trim()})} placeholder="비워두면 https://dashscope-intl.aliyuncs.com"/></Field>
+        <Field label="모델"><Select options={[{id:'paraformer-v2',label:'paraformer-v2 (권장)'},{id:'fun-asr',label:'fun-asr'},{id:'paraformer-8k-v2',label:'paraformer-8k-v2 (전화음질)'}]} value={c.dashModel||'paraformer-v2'} onChange={v=>setC({...c,dashModel:v})} style={{width:'100%'}}/></Field>
+      </div>
+      <label style={{display:'flex',gap:8,alignItems:'center',padding:'6px 10px',border:'1px solid var(--border-default)',borderRadius:4,marginBottom:8}}>
+        <input type="checkbox" checked={!!c.dashDiarize} onChange={e=>setC({...c,dashDiarize:e.target.checked})}/>
+        <span style={{fontSize:'var(--fs-md)'}}>화자 구분해서 받아쓰기</span></label>
+    </>}
+    <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>{engine==='paraformer'?'OpenAI 쪽 설정 (백업용)':'호출 방식'}</div>
     <Radio id="edge" label="Supabase Edge Function 경유 (권장)" sub={cloud?'OpenAI 키를 Supabase Secrets에만 보관합니다':'Supabase 연결 후 사용 가능'} disabled={!cloud}/>
     <Radio id="direct" label="브라우저에서 직접 호출" sub="이 브라우저에 OpenAI 키를 저장합니다 — 개인 PC에서만 권장"/>
     {via==='direct'&&<Field label="OpenAI API 키"><TextInput type="password" value={c.openaiKey||''} onChange={e=>setC({...c,openaiKey:e.target.value})} placeholder="sk-..."/></Field>}
@@ -37307,17 +37362,42 @@ function splitChunks(text,size){
   return out.filter(Boolean);
 }
 const grabSec=(t,head)=>{const re=new RegExp('===\\s*'+head+'\\s*===\\s*([\\s\\S]*?)(?====|$)');const m=re.exec(t||'');return m?m[1].trim():'';};
+/* ① 먼저 훑어서 「무슨 분야인지 + 반복해서 잘못 들린 낱말」을 뽑는다.
+   기계 전사는 같은 낱말을 계속 같은 식으로 틀리게 적는다(예: 乙烯→锂). 이걸 먼저 잡지 않으면
+   번역이 그 오류를 그대로 옮겨 적어 엉뚱한 글이 된다. */
+async function transcriptFixes(raw,hint){
+  const sample=raw.slice(0,3500)+(raw.length>9000?('\n…\n'+raw.slice(-2500)):'');
+  const r=await askClaude(
+    '아래는 회의·발표 녹음을 기계가 받아쓴 글이다. 두 가지만 판단하라.\n'
+    +'1) 이 발표의 분야와 주제 (한 줄)\n'
+    +'2) 그 분야 지식으로 볼 때 **음이 비슷해 잘못 받아쓴 것이 분명한 낱말**의 교정표.'
+    +' 특히 전문용어가 엉뚱한 낱말로 반복해 나오는 경우를 찾아라(예: 화학 발표인데 갑자기 다른 산업 용어가 반복되면 오인식이다).'
+    +' 확실한 것만 넣고, 애매하면 넣지 마라. 최대 15개.'
+    +(hint?('\n\n사용자가 알려준 고유명사: '+hint):'')
+    +'\n\n설명 없이 JSON만 출력한다:\n{"topic":"분야·주제 한 줄","fixes":[{"wrong":"잘못 적힌 낱말","right":"올바른 낱말","why":"근거 한 줄"}]}'
+    +'\n\n--- 받아쓴 글(일부) ---\n'+sample,
+    {max_tokens:1200});
+  const j=grabJSON(r)||{};
+  return {topic:j.topic||'',fixes:Array.isArray(j.fixes)?j.fixes.filter(f=>f&&f.wrong&&f.right).slice(0,15):[]};
+}
 async function polishTranscript(raw,opt={}){
   const hint=opt.hint?('\n자주 나오는 고유명사: '+opt.hint):'';
+  opt.onStep&&opt.onStep('분야와 오인식 낱말 파악 중…');
+  let fx={topic:'',fixes:[]};
+  try{fx=await transcriptFixes(raw,opt.hint);}catch(_){}
+  const ctx=(fx.topic?('\n이 녹취의 분야·주제: '+fx.topic):'')
+    +(fx.fixes.length?('\n기계가 잘못 받아쓴 낱말(반드시 바로잡을 것): '
+      +fx.fixes.map(f=>f.wrong+' → '+f.right).join(' · ')):'');
   const parts=splitChunks(raw,POLISH_CHUNK);
   const zh=[],ko=[];
   for(let i=0;i<parts.length;i++){
     opt.onStep&&opt.onStep('정리·번역 '+(i+1)+'/'+parts.length);
     const r=await askClaude(
-      '아래는 회의 녹음을 기계가 받아쓴 글의 일부다('+(i+1)+'/'+parts.length+').'+hint
-      +'\n\n[원문] 절: 잘못 들린 낱말·고유명사를 문맥에 맞게 바로잡고, 군더더기(음, 어, 그래서 이제)와 같은 말 반복을 지운다.'
-      +' 말한 순서와 내용은 절대 바꾸지 말고, 없는 내용을 지어내지 않는다. 주제가 바뀌는 곳에서 문단을 나눈다.'
-      +'\n[번역] 절: 위 내용을 업무 문서에 쓸 수 있는 자연스러운 한국어로 옮긴다.'
+      '아래는 회의 녹음을 기계가 받아쓴 글의 일부다('+(i+1)+'/'+parts.length+').'+hint+ctx
+      +'\n\n[원문] 절: 위 교정표와 분야 지식에 따라 **잘못 받아쓴 전문용어·고유명사를 적극적으로 바로잡고**,'
+      +' 군더더기(음, 어, 그래서 이제)와 같은 말 반복을 지운다.'
+      +' 말한 순서와 사실관계·수치는 바꾸지 않고, 없는 내용을 지어내지 않는다. 주제가 바뀌는 곳에서 문단을 나눈다.'
+      +'\n[번역] 절: 위 [원문]을 업무 문서에 쓸 수 있는 자연스러운 한국어로 옮긴다. 교정표를 반영한 낱말로 옮긴다.'
       +' 중국어 인명·지명·회사명은 한자(한글음)로 함께 적는다. 정해진 것·할 일은 문단 끝에 「→ 」로 적는다.'
       +'\n확실하지 않은 부분은 (?)로 표시한다. 앞뒤가 잘린 조각이므로 요약하거나 결론을 덧붙이지 않는다.'
       +'\n\n다른 말 없이 아래 형식으로만 출력한다.\n===원문===\n(정리된 원문)\n===번역===\n(한국어 번역)'
@@ -37334,7 +37414,10 @@ async function polishTranscript(raw,opt={}){
     +' 숫자·기한·결정된 것·해야 할 일을 우선한다. 각 줄은 「- 」로 시작하는 한 문장. 다른 말은 쓰지 않는다.'
     +'\n\n'+korean.slice(0,14000),{max_tokens:900});}
   catch(_){gist='';}
-  return '### 요점\n'+(gist.trim()||'(요점을 뽑지 못했습니다)')
+  const note=(fx.topic?('> 분야: '+fx.topic+'  \n'):'')
+    +(fx.fixes.length?('> 바로잡은 낱말: '+fx.fixes.map(f=>f.wrong+'→'+f.right).join(' · ')+'  \n'):'');
+  return (note?note+'\n':'')
+    +'### 요점\n'+(gist.trim()||'(요점을 뽑지 못했습니다)')
     +'\n\n### 한국어\n'+korean
     +'\n\n### 정리된 원문\n'+zh.join('\n\n');
 }
@@ -37477,7 +37560,7 @@ function LintView({db,setDb,toast,onOpenNote}){
     </div>}
   </Card>;
 }
-Object.assign(window,{polishTranscript,splitChunks,POLISH_CHUNK,RULES_TITLE,RULES_TEMPLATE,getRulesNote,wikiRules,wikiAsk,wikiIngest,wikiLint,
+Object.assign(window,{polishTranscript,transcriptFixes,splitChunks,POLISH_CHUNK,RULES_TITLE,RULES_TEMPLATE,getRulesNote,wikiRules,wikiAsk,wikiIngest,wikiLint,
   wRetrieve,AskView,IngestModal,LintView,srcTitle,srcLabel});
 </script>
 <script type="text/babel">/* ── 옵시디언 호환 vault 내보내기·가져오기 ────────────────────────
@@ -37799,11 +37882,11 @@ function KnowledgeView({db,setDb,st,set,toast}){
         for(let i=0;i<list.length;i++){
           const nm=(/\[([^\]]*)\]/.exec(list[i].raw)||[])[1]||('녹음 '+(i+1));
           toast('전사 준비 '+(i+1)+'/'+list.length+' · '+nm);
-          const blob=await Files.blob(list[i].path);
-          const txt=await transcribeBlob(blob,{name:'note',srcName:list[i].path,onStep:m=>toast(nm+' · '+m)});
+          const txt=await transcribeAttachment(list[i].path,{name:'note',onStep:m=>toast(nm+' · '+m)});
           all+=(all?'\n\n':'')+'### '+nm.replace(/^🎙\s*/,'')+'\n'+txt;
         }
-        upd(cur.id,{md:cur.md+'\n\n## 녹취 (Whisper)\n'+all.trim()+'\n'});
+        const eng=Store.cfg.sttEngine==='paraformer'?'Paraformer':'Whisper';
+        upd(cur.id,{md:cur.md+'\n\n## 녹취 ('+eng+')\n'+all.trim()+'\n'});
         toast('전사 완료 — 위키 정돈으로 다듬을 수 있습니다');
       }catch(e){toast('⚠ '+e.message);}
       set({aiBusy:false});return;
@@ -38250,7 +38333,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v3.2';
+const APP_VERSION='v3.3.1';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
