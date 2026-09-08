@@ -36483,14 +36483,20 @@ const Gmail={
 
   /* 받은편지함 + 보낸편지함 가져오기. 이미 있는 메일(gid)은 건너뛰고 읽음/별표만 갱신 */
   async sync(acc,existing,onProgress){
-    const have=new Map(existing.filter(m=>m.gid).map(m=>[m.gid,m]));const out=[];let fetched=0,skipped=0;
-    /* 광고·소셜·알림(Gmail 카테고리)은 기본 제외 — 설정 › 메일 연동에서 끌 수 있음 */
+    const have=new Map(existing.filter(m=>m.gid).map(m=>[m.gid,m]));const out=[];let fetched=0,skipped=0,filtered=0;
+    /* 광고·소셜은 기본 제외 — 「업데이트·포럼」은 영수증·알림처럼 볼 일이 있어 남긴다. 설정 › 메일 연동에서 끌 수 있음 */
     const clean=Store.cfg.mailFilter!==false;
-    for(const [label,max] of [['INBOX',60],['SENT',20]]){
-      const q=['newer_than:60d'];
-      if(clean&&label==='INBOX')q.push('-category:promotions','-category:social','-category:forums','-category:updates','-in:spam');
+    const days=+(Store.cfg.mailDays||60),cap=+(Store.cfg.mailMax||60);
+    for(const [label,max] of [['INBOX',cap],['SENT',Math.max(10,Math.round(cap/3))]]){
+      const q=['newer_than:'+days+'d'];
+      if(clean&&label==='INBOX')q.push('-category:promotions','-category:social','-in:spam');
       const list=await this.api(`messages?labelIds=${label}&maxResults=${max}&q=${encodeURIComponent(q.join(' '))}`);
-      const ids=(list.messages||[]).map(m=>m.id);
+      let ids=(list.messages||[]).map(m=>m.id);
+      /* 필터가 몇 통을 걸렀는지 알려주기 위해 거르지 않은 목록도 세어 본다(목록 조회는 가볍다) */
+      if(clean&&label==='INBOX'){
+        try{const raw=await this.api(`messages?labelIds=INBOX&maxResults=${max}&q=${encodeURIComponent('newer_than:'+days+'d')}`);
+          filtered=Math.max(0,((raw.messages||[]).length)-ids.length);}catch(_){}
+      }
       for(let i=0;i<ids.length;i+=10){ /* 10개씩 병렬 */
         const chunk=ids.slice(i,i+10).filter(id=>{if(have.has(id)){skipped++;return false;}return true;});
         const got=await Promise.all(chunk.map(id=>this.api(`messages/${id}?format=full`).catch(()=>null)));
@@ -36498,7 +36504,42 @@ const Gmail={
         onProgress&&onProgress(fetched,ids.length);
       }
     }
-    return {added:out,skipped};
+    console.info('[PMS 동기화]',{조회:fetched+skipped,새로:out.length,이미있음:skipped,광고소셜제외:filtered,기간:days+'일',상한:cap});
+    return {added:out,skipped,filtered};
+  },
+
+  /* 필터에 걸려 안 가져온 메일 목록 — 제목·보낸 사람만 가볍게(metadata) 받아온다 */
+  async excludedList(onProgress){
+    const days=+(Store.cfg.mailDays||60),cap=+(Store.cfg.mailMax||60);
+    const base='newer_than:'+days+'d';
+    const raw=await this.api(`messages?labelIds=INBOX&maxResults=${cap}&q=${encodeURIComponent(base)}`);
+    const clean=await this.api(`messages?labelIds=INBOX&maxResults=${cap}&q=${encodeURIComponent(base+' -category:promotions -category:social -in:spam')}`);
+    const keep=new Set((clean.messages||[]).map(m=>m.id));
+    const ids=(raw.messages||[]).map(m=>m.id).filter(id=>!keep.has(id));
+    const out=[];
+    for(let i=0;i<ids.length;i+=10){
+      const got=await Promise.all(ids.slice(i,i+10).map(id=>
+        this.api('messages/'+id+'?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date').catch(()=>null)));
+      got.filter(Boolean).forEach(m=>{
+        const H={};(m.payload&&m.payload.headers||[]).forEach(h=>H[h.name.toLowerCase()]=h.value);
+        const L=m.labelIds||[];
+        const d=new Date(H.date||Number(m.internalDate));
+        out.push({gid:m.id,subject:H.subject||'(제목 없음)',from:H.from||'',
+          date:isNaN(d)?nowStamp():d.toISOString(),snippet:m.snippet||'',
+          cat:L.includes('SPAM')?'스팸':L.includes('CATEGORY_PROMOTIONS')?'광고':L.includes('CATEGORY_SOCIAL')?'소셜':'기타'});});
+      onProgress&&onProgress(out.length,ids.length);
+    }
+    return out.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  },
+  /* 고른 메일만 본문까지 받아 오기 */
+  async fetchByIds(acc,gids,onProgress){
+    const out=[];
+    for(let i=0;i<gids.length;i+=10){
+      const got=await Promise.all(gids.slice(i,i+10).map(id=>this.api(`messages/${id}?format=full`).catch(()=>null)));
+      got.filter(Boolean).forEach(m=>out.push(this.toMail(m,acc)));
+      onProgress&&onProgress(out.length,gids.length);
+    }
+    return out;
   },
 
   /* 보내기: RFC 2822 텍스트 메일 → base64url */
@@ -36520,7 +36561,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.8'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.1'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36688,16 +36729,24 @@ function SettingsModal({open,onClose,onToast}){
       <FilesSection onToast={onToast}/>
     </>}
     {tab==='mail'&&<>
-      <div style={{font:'var(--type-card-title)',marginBottom:6}}>회사 메일 (Outlook)</div>
-      <InfoBar>사내 정책상 외부 IMAP·자동 전달은 보통 차단됩니다. 권장 운용:<br/>① <b>사내 PC</b> — Outlook 규칙으로 특정 폴더를 .msg/.eml 저장 → 이 앱 "가져오기"에 드롭. IT 허용 시 Microsoft Graph(Mail.Read) 테넌트 앱 등록으로 자동화.<br/>② <b>외부</b> — OWA에서 메일 본문 복사 → "붙여넣기 가져오기". 발송은 mailto:로 OWA/Outlook을 열어 보냅니다.</InfoBar>
-      <Field label="Graph 앱(Client) ID — IT 승인 후"><TextInput value={c.graphClientId||''} onChange={set('graphClientId')} placeholder="선택"/></Field>
+      <InfoBar>회사 메일은 웹메일에서 <b>.eml로 내려받아</b> 메일 화면의 📥 가져오기에 끌어놓는 방식으로 씁니다. 사내 정책상 외부 IMAP·자동 전달은 보통 막혀 있어, 이 경로가 가장 안전합니다.</InfoBar>
       <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>개인 메일 (Gmail)</div>
       <InfoBar>Google 콘솔에서 Gmail API를 켜고 OAuth 클라이언트(웹)를 만든 뒤 Client ID를 입력하면 메일 화면의 🔗 계정 연결에서 "Google 연결"이 활성화됩니다(가이드 04). 호스팅 주소에서는 pms.config.js의 gmailClientId로도 지정할 수 있습니다.</InfoBar>
       <Field label="Gmail OAuth Client ID"><TextInput value={c.gmailClientId||''} onChange={set('gmailClientId')} placeholder="xxxx.apps.googleusercontent.com"/></Field>
       <label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 10px',border:'1px solid var(--border-default)',borderRadius:4,cursor:'pointer'}}>
         <input type="checkbox" checked={c.mailFilter!==false} onChange={e=>setC({...c,mailFilter:e.target.checked})} style={{marginTop:3}}/>
-        <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>광고 · 소셜 · 알림 메일 제외</span>
-        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>Gmail이 프로모션 · 소셜 · 알림 · 포럼으로 분류한 메일과 스팸을 동기화에서 빼고 기본 메일함만 가져옵니다</div></span></label>
+        <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>광고 · 소셜 메일 제외</span>
+        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>Gmail이 프로모션 · 소셜로 분류한 메일과 스팸만 뺍니다. 영수증 · 알림이 들어 있는 「업데이트」와 「포럼」은 가져옵니다. 동기화가 끝나면 몇 통이 걸러졌는지 알려줍니다</div></span></label>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginTop:8}}>
+        <Field label="가져올 기간">
+          <Select style={{width:'100%'}} value={String(c.mailDays||60)} onChange={v=>setC({...c,mailDays:+v})}
+            options={[{id:'7',label:'최근 7일'},{id:'30',label:'최근 30일'},{id:'60',label:'최근 60일 (기본)'},{id:'90',label:'최근 90일'},{id:'365',label:'최근 1년'}]}/>
+        </Field>
+        <Field label="한 번에 가져올 통수">
+          <Select style={{width:'100%'}} value={String(c.mailMax||60)} onChange={v=>setC({...c,mailMax:+v})}
+            options={[{id:'30',label:'30통'},{id:'60',label:'60통 (기본)'},{id:'150',label:'150통'},{id:'300',label:'300통'}]}/>
+        </Field>
+      </div>
       <Field label="자동 동기화 주기">
         <Select style={{width:'100%'}} value={String(c.mailAuto||0)} onChange={v=>setC({...c,mailAuto:+v})}
           options={[{id:'0',label:'끄기 — 🔄 단추를 눌렀을 때만'},{id:'1',label:'1분마다'},{id:'5',label:'5분마다 (권장)'},{id:'15',label:'15분마다'},{id:'30',label:'30분마다'},{id:'60',label:'1시간마다'}]}/>
@@ -36720,7 +36769,7 @@ function ClaudeTab({c,setC}){
     <input type="radio" name="claudeVia" checked={via===id} disabled={disabled} onChange={()=>setC({...c,claudeVia:id})} style={{marginTop:3}}/>
     <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span><div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{sub}</div></span></label>;
   return <>
-    <InfoBar>지식 관리의 🤖 요약 · 위키 생성 · 태그 추천에 사용합니다. 사용량만큼 Anthropic에 과금됩니다(노트 요약 1회 ≈ 5~10원).</InfoBar>
+    <InfoBar>지식 관리의 🤖 위키 정돈 · 물어보기 · 위키에 수집 · 정리·번역 · 이미지 읽기에 사용합니다. 사용량만큼 Anthropic에 과금됩니다(노트 1건 정돈 ≈ 5~10원).</InfoBar>
     <InfoBar>🖼 <b>이미지 읽기</b>(노트에 붙인 사진·표를 Claude가 읽는 기능)를 쓰려면 Edge Function을 <b>새 코드로 다시 배포</b>해야 합니다 — 소스 묶음의 <code>supabase/functions/claude/index.ts</code>를 복사해 대시보드 › Edge Functions › claude › 코드 붙여넣기 › Deploy (가이드 10)</InfoBar>
     <Radio id="edge" label="Supabase Edge Function 경유 (권장)" sub={cloud?'API 키를 Supabase Secrets에만 보관. 로그인한 사용자만 호출 가능. 가이드 02 참고':'Supabase 연결 후 사용 가능'} disabled={!cloud}/>
     <Radio id="direct" label="브라우저에서 직접 호출" sub="이 브라우저에 키 저장. 간단하지만 HTML을 공유하거나 PC를 같이 쓰면 키가 노출될 수 있음"/>
@@ -36911,10 +36960,10 @@ function AttachBar({mail,toast}){
     </button>)}
   </div>;
 }
-function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
+function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,openSettings}){
   const {Card,Button,Badge,InfoBar,Modal,DropZone}=window.HDWorkbookDesignSystem_ad60e4;
   const [q,setQ]=React.useState('');
-  const upd=(id,patch)=>setDb('mails',db.mails.map(m=>m.id===id?{...m,...patch}:m));
+  const upd=(id,patch)=>setDb('mails',arr=>arr.map(m=>m.id===id?{...m,...patch}:m));
   const list=db.mails.filter(m=>(st.acc==='all'||m.acc===st.acc)&&(st.folder==='starred'?m.star:m.folder===st.folder)&&(!q||(m.subject+m.from+m.body).toLowerCase().includes(q.toLowerCase()))).sort((a,b)=>b.date.localeCompare(a.date));
   const cur=db.mails.find(m=>m.id===st.sel);
   const accOf=id=>db.accounts.find(a=>a.id===id)||{};
@@ -36922,8 +36971,9 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const open=m=>{set({sel:m.id});if(!m.read)upd(m.id,{read:true});};
   const picked=st.picked||[];
   const togglePick=id=>set({picked:picked.includes(id)?picked.filter(x=>x!==id):[...picked,id]});
-  const bulk=(patch,msg)=>{setDb('mails',db.mails.map(m=>picked.includes(m.id)?{...m,...patch}:m));set({picked:[],sel:null});toast(picked.length+'건 '+msg);};
-  const bulkDelete=()=>{setDb('mails',db.mails.filter(m=>!picked.includes(m.id)));set({picked:[],sel:null});toast(picked.length+'건 삭제됨');};
+  const bulk=(patch,msg)=>{setDb('mails',arr=>arr.map(m=>picked.includes(m.id)?{...m,...patch}:m));set({picked:[],sel:null});toast(picked.length+'건 '+msg);};
+  const bulkDelete=()=>{setDb('mails',arr=>arr.filter(m=>!picked.includes(m.id)));set({picked:[],sel:null});toast(picked.length+'건 삭제됨');};
+  const bulkNote=()=>{const ms=db.mails.filter(m=>picked.includes(m.id));if(!ms.length)return;sendManyToNote(ms);set({picked:[]});};
   const compose=(mode)=>{const a=cur&&accOf(cur.acc);const base={acc:cur?cur.acc:(st.acc==='all'?'work':st.acc),to:'',cc:'',subject:'',body:''};
     if(mode==='reply')Object.assign(base,{to:cur.from,subject:'RE: '+cur.subject.replace(/^RE:\s*/i,''),body:'\n\n---- 원본 메일 ----\n'+cur.body});
     if(mode==='fwd')Object.assign(base,{subject:'FW: '+cur.subject,body:'\n\n---- 전달된 메일 ----\n보낸 사람: '+cur.from+'\n제목: '+cur.subject+'\n\n'+cur.body});
@@ -36940,9 +36990,10 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const disconnectGmail=a=>{Gmail.disconnect();setDb('accounts',db.accounts.map(x=>x.id===a.id?{...x,status:'ready',note:'Gmail API OAuth — 연결 버튼으로 다시 연결'}:x));toast('연결 해제');};
   const syncAll=async()=>{const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');if(!targets.length){set({accOpen:true});toast('연결된 API 계정 없음 · Google 연결을 먼저 하세요');return;}
     setBusy('sync');let total=0;
-    try{for(const a of targets){const {added,skipped}=await Gmail.sync(a.id,db.mails,(n,all)=>toast(`🔄 ${a.label} · ${n}/${all}건 가져오는 중`));
+    try{for(const a of targets){const {added,skipped,filtered}=await Gmail.sync(a.id,db.mails,(n,all)=>toast(`🔄 ${a.label} · ${n}/${all}건 가져오는 중`));
         if(added.length){setDb('mails',[...added,...db.mails.filter(m=>!added.some(x=>x.id===m.id))]);}total+=added.length;
-        toast(added.length?`✓ ${added.length}건 새로 가져옴 · ${skipped}건은 이미 있음`:'새 메일 없음');}}
+        const tail=(skipped?` · ${skipped}건은 이미 있음`:'')+(filtered?` · 광고·소셜 ${filtered}건 제외`:'');
+        toast((added.length?`✓ ${added.length}건 새로 가져옴`:'새 메일 없음')+tail);}}
     catch(e){toast('⚠ 동기화 실패: '+explainGmailError(e));}
     setBusy('');};
   /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다 */
@@ -36978,7 +37029,9 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
+        if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
+        set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
       toolbarRight={<><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·보낸 사람·본문" style={{width:220,padding:'4px 8px'}}/><Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
       {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)',flexWrap:'wrap'}}>
         <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>건 선택
@@ -36989,6 +37042,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
         <Button variant="gray" size="xs" onClick={()=>bulk({folder:'inbox'},'받은편지함으로')}>📥 받은편지함</Button>
         <span style={{color:'var(--text-label)'}}>|</span>
         {db.accounts.map(a=><Button key={a.id} variant="gray" size="xs" onClick={()=>bulk({acc:a.id},'→ '+a.label)}>→ {a.label}</Button>)}
+        <Button variant="gray" size="xs" onClick={bulkNote} title="선택한 메일을 각각 노트로 만듭니다(화면은 그대로)">📝 노트로</Button>
         <Button variant="secondary" size="xs" onClick={()=>set({ingest:db.mails.filter(m=>picked.includes(m.id)).map(m=>({kind:'mail',item:m}))})} title="선택한 메일을 개념 노트에 합칩니다">🤖 위키에 수집</Button>
         <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
         <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
@@ -37005,7 +37059,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
             <div style={{display:'flex',gap:6,flexWrap:'wrap',paddingBottom:10,borderBottom:'1px solid var(--border-default)',marginBottom:10}}>
               <TB onClick={()=>compose('reply')}>↩ 답장</TB><TB onClick={()=>compose('fwd')}>↪ 전달</TB><TB onClick={()=>upd(cur.id,{star:!cur.star})}>{cur.star?'★ 별표 해제':'☆ 별표'}</TB>
               <TB onClick={()=>sendToNote(cur)}>📝 노트로</TB><TB onClick={()=>set({ingest:[{kind:'mail',item:cur}]})}>🤖 위키에 수집</TB><TB onClick={()=>sendToEvent(cur)}>📅 일정으로</TB>
-              <span style={{marginLeft:'auto',display:'flex',gap:6}}><TB onClick={()=>{upd(cur.id,{folder:'archive'});set({sel:null});toast('보관됨');}}>🗄 보관</TB><Button variant="danger" size="sm" onClick={()=>{setDb('mails',db.mails.filter(m=>m.id!==cur.id));set({sel:null});toast('삭제됨');}}>🗑 삭제</Button></span>
+              <span style={{marginLeft:'auto',display:'flex',gap:6}}><TB onClick={()=>{upd(cur.id,{folder:'archive'});set({sel:null});toast('보관됨');}}>🗄 보관</TB><Button variant="danger" size="sm" onClick={()=>{setDb('mails',arr=>arr.filter(m=>m.id!==cur.id));set({sel:null});toast('삭제됨');}}>🗑 삭제</Button></span>
             </div>
             <h3 style={{margin:'0 0 8px',font:'600 16.1px/1.35 var(--font-sans)'}}>{cur.subject}</h3>
             <div style={{display:'grid',gridTemplateColumns:'70px 1fr',rowGap:2,fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:14}}>
@@ -37029,10 +37083,11 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
         {a.provider==='gmail'&&(a.status==='connected'
           ?<><Button size="sm" variant="gray" disabled={busy==='sync'} onClick={()=>{set({accOpen:false});syncAll();}}>🔄 동기화</Button><Button size="sm" variant="ghost" onClick={()=>disconnectGmail(a)}>연결 해제</Button></>
           :<Button size="sm" variant="accent" disabled={!Store.cfg.gmailClientId||busy==='connect'} title={Store.cfg.gmailClientId?'Google 계정으로 연결':'설정에서 Client ID를 먼저 입력'} onClick={()=>connectGmail(a)}>{busy==='connect'?'승인 창 확인…':'Google 연결'}</Button>)}
-        {a.provider==='outlook'&&<Button size="sm" variant="accent" disabled={!Store.cfg.graphClientId} title={Store.cfg.graphClientId?'Microsoft 계정으로 연결':'IT 승인 후 Client ID 입력'} onClick={()=>toast('Microsoft 로그인 창을 엽니다')}>Graph 연결</Button>}
       </div>)}
       <div style={{marginTop:10}}><Button variant="ghost" size="sm" onClick={()=>{set({accOpen:false});openSettings('mail');}}>⚙ 연동 설정 열기</Button></div>
     </Modal>
+    <ExcludedModal open={!!st.excl} acc={st.excl} toast={toast} onClose={()=>set({excl:null})}
+      onRestore={mails=>setDb('mails',[...mails,...db.mails.filter(m=>!mails.some(x=>x.id===m.id))])}/>
     <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null,picked:[]})}/>
   </>;
 }
@@ -37044,6 +37099,54 @@ function MailRow({m,on,picked,onPick,acc,onClick,onStar}){const [h,setH]=React.u
     <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(m.body||'').split('\n')[0]}</div></div>
   <div onClick={onClick} style={{textAlign:'right',fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',cursor:'pointer'}}>{fmtDT(m.date)}<div style={{marginTop:3,color:acc.provider==='gmail'?'var(--color-success)':'var(--color-accent)',fontFamily:'var(--font-sans)'}}>{acc.label||''}</div></div>
 </div>;}
+/* 필터에 걸려 안 가져온 메일 — 목록을 보고 고른 것만 되살린다 */
+function ExcludedModal({open,acc,onClose,onRestore,toast}){
+  const {Button,Modal,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [rows,setRows]=React.useState(null);const [pick,setPick]=React.useState([]);
+  const [busy,setBusy]=React.useState('');const [err,setErr]=React.useState('');
+  const load=async()=>{setBusy('list');setErr('');setRows(null);setPick([]);
+    try{setRows(await Gmail.excludedList((n,all)=>setBusy('목록 '+n+'/'+all)));}
+    catch(e){setErr(explainGmailError(e));setRows([]);}
+    setBusy('');};
+  React.useEffect(()=>{if(open)load();},[open]);
+  if(!open)return null;
+  const toggle=g=>setPick(p=>p.includes(g)?p.filter(x=>x!==g):[...p,g]);
+  const restore=async()=>{if(!pick.length)return;setBusy('가져오는 중…');
+    try{const mails=await Gmail.fetchByIds(acc,pick,(n,all)=>setBusy('가져오는 중 '+n+'/'+all));
+      onRestore(mails);toast(mails.length+'건 되살림');onClose();}
+    catch(e){setErr(explainGmailError(e));}
+    setBusy('');};
+  const TONE={광고:'muted',소셜:'blue',스팸:'warn',기타:'pill'};
+  return <Modal open={open} onClose={onClose} title="필터로 제외된 메일" width={720}
+    footer={<><Button variant="ghost" size="sm" onClick={load} disabled={!!busy}>다시 불러오기</Button>
+      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <Button variant="gray" onClick={onClose}>닫기</Button>
+        <Button variant="accent" icon="📥" disabled={!pick.length||!!busy} onClick={restore}>{busy&&busy!=='list'?busy:'선택한 '+pick.length+'건 가져오기'}</Button>
+      </span></>}>
+    <InfoBar>동기화할 때 <b>광고 · 소셜 · 스팸</b>으로 분류돼 건너뛴 메일입니다. 제목과 보낸 사람만 가볍게 불러왔고, 고른 것만 본문까지 받아 받은편지함에 넣습니다.</InfoBar>
+    {err&&<InfoBar tone="warn">{err}</InfoBar>}
+    {busy==='list'||/^목록/.test(busy)?<div style={{padding:20,color:'var(--text-label)',textAlign:'center'}}>{busy==='list'?'불러오는 중…':busy}</div>:null}
+    {rows&&!rows.length&&!busy&&<div style={{padding:26,color:'var(--text-label)',textAlign:'center'}}>제외된 메일이 없습니다</div>}
+    {rows&&rows.length>0&&<>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 2px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>
+        <input type="checkbox" checked={pick.length===rows.length} onChange={()=>setPick(pick.length===rows.length?[]:rows.map(r=>r.gid))}/>
+        전체 선택 <span style={{marginLeft:'auto'}}>{rows.length}건</span>
+      </div>
+      <div style={{maxHeight:400,overflowY:'auto'}}>
+        {rows.map(r=><label key={r.gid} style={{display:'grid',gridTemplateColumns:'20px 52px 1fr 92px',gap:8,alignItems:'start',padding:'7px 2px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',fontSize:'var(--fs-base)'}}>
+          <input type="checkbox" checked={pick.includes(r.gid)} onChange={()=>toggle(r.gid)} style={{marginTop:3}}/>
+          <Badge tone={TONE[r.cat]||'pill'}>{r.cat}</Badge>
+          <span style={{minWidth:0}}>
+            <div style={{fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.subject}</div>
+            <div style={{color:'var(--text-muted)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.from.replace(/<.*>/,'').trim()||r.from}</div>
+            {r.snippet&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.snippet}</div>}
+          </span>
+          <span style={{textAlign:'right',color:'var(--text-label)',fontFamily:'var(--font-num)',fontSize:'var(--fs-sm)'}}>{fmtDT(r.date)}</span>
+        </label>)}
+      </div>
+    </>}
+  </Modal>;
+}
 function ComposeModal({draft,accounts,onClose,onSend}){
   const {Button,Modal}=window.HDWorkbookDesignSystem_ad60e4;const [d,setD]=React.useState(draft);React.useEffect(()=>setD(draft),[draft]);if(!d)return null;
   const f=k=>e=>setD({...d,[k]:e.target.value});
@@ -37065,14 +37168,14 @@ function ImportModal({open,accounts,onClose,onImport}){
     if(items.length){setStep('첨부 파일 보관 중…');await stashAttachments(items,s=>setStep(s));setStep('');onImport(items,acc);}};
   return <Modal open={open} onClose={onClose} title="메일 가져오기" width={560} footer={<><Button variant="gray" onClick={onClose}>닫기</Button><Button variant="accent" icon="📥" disabled={!paste.trim()} onClick={()=>onImport([parseEml(paste)],acc)}>붙여넣기 가져오기</Button></>}>
     <Field label="가져올 계정" row><Select value={acc} onChange={setAcc} options={accounts.map(a=>({id:a.id,label:a.label}))}/></Field>
-    <DropZone title="📎 .msg / .eml 파일을 여기에 놓으세요 (여러 개 가능)" sub="Outlook: 메일을 선택해 바탕화면·폴더로 드래그하면 .msg 파일이 생김 → 그 파일들을 여기에 드롭 · Gmail: ⋮ › 메시지 다운로드(.eml)" accept=".msg,.eml,.txt" onFiles={files}/>
+    <DropZone title="📎 .eml 파일을 여기에 놓으세요 (여러 개 가능)" sub="회사 웹메일에서 메일을 .eml로 내려받아 여기에 드롭 · Gmail은 ⋮ › 메시지 다운로드(.eml)" accept=".eml,.txt" onFiles={files}/>
     {step&&<InfoBar>{step}</InfoBar>}
     {err&&<InfoBar tone="warn">읽지 못한 파일: {err}</InfoBar>}
-    <InfoBar>외부에서는 OWA 메일을 열어 헤더(보낸 사람/받는 사람/제목/날짜)와 본문을 그대로 복사해 아래에 붙여넣으세요.</InfoBar>
+    <InfoBar>파일로 내려받기 어려울 때는 메일을 열어 헤더(보낸 사람/받는 사람/제목/날짜)와 본문을 그대로 복사해 아래에 붙여넣으세요.</InfoBar>
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,FOLDERS,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -37960,23 +38063,25 @@ function KnowledgeView({db,setDb,st,set,toast}){
   const [lw,setLw,resetLw]=usePaneSize('noteList',250); /* 목록 열 폭 — 아래 early return보다 위에 있어야 훅 순서가 안 바뀐다 */
   const scopes=st.scopes||{work:true,personal:true};const tag=st.tag||'';
   const picked=st.picked||[];
-  const upd=(id,patch)=>setDb('notes',notes.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
-  const openByTitle=t=>{const n=notes.find(x=>x.title===t);if(n){set({sel:n.id,view:'notes'});return;}const nn=newNote(t,cur?cur.scope:'work');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes'});toast('새 노트 생성 · '+t);};
+  const upd=(id,patch)=>setDb('notes',arr=>arr.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
+  const openByTitle=t=>{const n=notes.find(x=>x.title===t);if(n){set({sel:n.id,view:'notes'});return;}const nn=newNote(t,cur?cur.scope:'work');setDb('notes',arr=>[...arr,nn]);set({sel:nn.id,view:'notes'});toast('새 노트 생성 · '+t);};
   /* 규칙 노트 — 없으면 기본 규칙으로 만들어 연다 */
   const openRules=()=>{const r=getRulesNote(db);if(r){set({sel:r.id,view:'notes'});return;}
-    const nn=newNote(RULES_TITLE,'work',RULES_TEMPLATE,['규칙']);setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes'});toast('규칙 노트를 만들었습니다');};
-  const create=()=>{const nn=newNote('제목 없음',scopes.work?'work':'personal');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes',mode:'edit'});};
+    const nn=newNote(RULES_TITLE,'work',RULES_TEMPLATE,['규칙']);setDb('notes',arr=>[...arr,nn]);set({sel:nn.id,view:'notes'});toast('규칙 노트를 만들었습니다');};
+  const create=()=>{const nn=newNote('제목 없음',scopes.work?'work':'personal');setDb('notes',arr=>[...arr,nn]);set({sel:nn.id,view:'notes',mode:'edit'});};
   const backlinks=cur?notes.filter(n=>n.id!==cur.id&&wikiLinks(n.md).includes(cur.title)):[];
   const exportMd=()=>{if(!cur)return;const blob=new Blob([cur.md],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=cur.title.replace(/[\\/:*?"<>|]/g,'_')+'.md';a.click();};
   const exportAll=()=>{const txt=notes.map(n=>'<!-- file: '+SCOPE_LABEL[n.scope||'work']+'/'+n.title+'.md | tags: '+(n.tags||[]).join(',')+' -->\n'+n.md).join('\n\n');const blob=new Blob([txt],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pms-vault.md';a.click();toast('전체 노트 내보내기');};
-  const importMd=async fs=>{const add=[];for(const f of fs){const md=await f.text();const t=(/^#\s+(.*)/m.exec(md)||[])[1]||f.name.replace(/\.md$/,'');add.push(newNote(t,scopes.work?'work':'personal',md));}setDb('notes',[...notes,...add]);toast(add.length+'개 노트 가져옴');};
+  const importMd=async fs=>{const add=[];for(const f of fs){const md=await f.text();const t=(/^#\s+(.*)/m.exec(md)||[])[1]||f.name.replace(/\.md$/,'');add.push(newNote(t,scopes.work?'work':'personal',md));}setDb('notes',arr=>[...arr,...add]);toast(add.length+'개 노트 가져옴');};
   /* 그래프에서 연결 추가/해제 */
   const linkNotes=(fromId,toId)=>{const a=notes.find(n=>n.id===fromId),b=notes.find(n=>n.id===toId);if(!a||!b||a.id===b.id)return;
     if(wikiLinks(a.md).includes(b.title)){toast('이미 연결됨');return;}
     upd(a.id,{md:addWikiLink(a.md,b.title)});toast('연결 · '+a.title+' → '+b.title);};
   const unlinkNotes=(fromId,toId)=>{const a=notes.find(n=>n.id===fromId),b=notes.find(n=>n.id===toId);if(!a||!b)return;
     upd(a.id,{md:removeWikiLink(a.md,b.title)});toast('연결 해제 · '+a.title+' → '+b.title);};
-  const ai=async kind=>{if(!cur)return;set({aiBusy:true});
+  const ai=async(kind,target)=>{
+    const cur=target||notes.find(n=>n.id===st.sel);   /* 일괄 작업 때는 넘겨받은 노트로 */
+    if(!cur)return;set({aiBusy:true});
     const [main,raw]=splitRaw(cur.md);const src=main; /* 이미 정돈된 노트면 원문 섹션은 건드리지 않고 본문만 다시 정돈 */
     /* 받아쓴 글을 사람이 읽을 수 있게 — 교정 + 한국어 번역 + 요점. 주어진 본문을 정리해 새 본문을 돌려준다 */
     const polishMd=async(mdIn)=>{
@@ -38042,27 +38147,41 @@ function KnowledgeView({db,setDb,st,set,toast}){
       }catch(e){toast('⚠ '+e.message);}
       set({aiBusy:false});return;
     }
-    const p=kind==='summary'?'다음 마크다운 노트를 한국어로 3~5줄 요약해줘. 결과는 마크다운 불릿만:\n\n'+cur.md
-      :kind==='wiki'?'다음 메모를 개인 위키 항목으로 정돈해줘. 규칙:\n- 한국어, 마크다운만 출력(앞뒤 설명 없이)\n- 구조: # 제목, 한 줄 정의, ## 핵심, ## 관련 개념(각 항목을 [[위키링크]]로), ## 출처\n- 원문에 없는 사실·수치·해석을 절대 추가하지 말 것\n- 원문의 물음표·"확인 필요"·추정 표현은 단정문으로 바꾸지 말고 그대로 유지\n- 구체적 숫자·날짜·사람 이름·기한은 빠뜨리지 말 것\n- [[위키링크]]는 아래 "기존 노트 목록"에 있는 제목과 일치하면 그 제목을 그대로 사용, 없으면 새 개념명\n\n기존 노트 목록: '+notes.filter(x=>x.id!==cur.id).map(x=>x.title).join(' · ')+'\n\n메모:\n'+src
-      :'다음 노트에 어울리는 태그 3~5개를 쉼표로만 답해줘(한국어 명사, # 없이):\n\n'+cur.md;
+    const p=kind==='wiki'?'다음 메모를 개인 위키 항목으로 정돈해줘. 규칙:\n- 한국어, 마크다운만 출력(앞뒤 설명 없이)\n- 구조: # 제목, 한 줄 정의, ## 핵심, ## 관련 개념(각 항목을 [[위키링크]]로), ## 출처\n- 원문에 없는 사실·수치·해석을 절대 추가하지 말 것\n- 원문의 물음표·"확인 필요"·추정 표현은 단정문으로 바꾸지 말고 그대로 유지\n- 구체적 숫자·날짜·사람 이름·기한은 빠뜨리지 말 것\n- [[위키링크]]는 아래 "기존 노트 목록"에 있는 제목과 일치하면 그 제목을 그대로 사용, 없으면 새 개념명\n- 맨 마지막 줄에 이 노트의 태그를 `태그: 낱말1, 낱말2, 낱말3` 형식으로 3~5개 붙일 것(한국어 명사, # 없이)\n\n기존 노트 목록: '+notes.filter(x=>x.id!==cur.id).map(x=>x.title).join(' · ')+'\n\n메모:\n'+src
+      :'';
+    if(!p){set({aiBusy:false});return;}
     try{const r=await askClaude(p);
-      if(kind==='tags')upd(cur.id,{tags:[...new Set([...(cur.tags||[]),...r.split(/[,\n]/).map(s=>s.trim().replace(/^#/,'')).filter(Boolean)])]});
-      else if(kind==='summary')upd(cur.id,{md:cur.md+'\n\n## 요약 (Claude)\n'+r.trim()});
-      else{const wiki=r.trim().replace(/^```(?:markdown|md)?\s*/i,'').replace(/```\s*$/,'').trim();
-        const rawBody=raw?raw.replace(/^## 원문 메모\s*\n?/,''):src.replace(/^#\s+.*\n?/,'').trim(); /* 원문은 노트 안에 접어서 보존 */
-        const md=wiki+'\n\n'+RAW_HEAD+'\n'+rawBody+'\n';
-        upd(cur.id,{md,title:(/^#\s+(.*)/m.exec(wiki)||[])[1]||cur.title,tags:[...new Set([...(cur.tags||[]),'정돈됨'])]});}
-      toast('Claude 완료');}catch(e){toast('⚠ '+e.message);}set({aiBusy:false});};
+      let wiki=r.trim().replace(/^```(?:markdown|md)?\s*/i,'').replace(/```\s*$/,'').trim();
+      /* 마지막 「태그: …」 줄은 떼어 태그로 붙인다 */
+      let newTags=[];
+      wiki=wiki.replace(/\n*^\s*(?:태그|tags)\s*[:：]\s*(.+)$/im,(m,list)=>{
+        newTags=list.split(/[,·]/).map(x=>x.trim().replace(/^#/,'')).filter(Boolean);return '';}).trim();
+      const rawBody=raw?raw.replace(/^## 원문 메모\s*\n?/,''):src.replace(/^#\s+.*\n?/,'').trim(); /* 원문은 노트 안에 접어서 보존 */
+      const md=wiki+'\n\n'+RAW_HEAD+'\n'+rawBody+'\n';
+      upd(cur.id,{md,title:(/^#\s+(.*)/m.exec(wiki)||[])[1]||cur.title,
+        tags:[...new Set([...(cur.tags||[]),...newTags,'정돈됨'])]});
+      toast('정돈 완료'+(newTags.length?' · 태그 '+newTags.length+'개':''));}
+    catch(e){toast('⚠ '+e.message);}set({aiBusy:false});};
+  /* 고른 노트를 차례로 — 정돈이나 정리·번역 */
+  const bulkAi=async kind=>{
+    const targets=notes.filter(n=>picked.includes(n.id));
+    if(!targets.length)return;
+    const label=kind==='wiki'?'위키 정돈':'정리·번역';
+    for(let i=0;i<targets.length;i++){
+      toast(label+' ('+(i+1)+'/'+targets.length+') '+targets[i].title);
+      await ai(kind,targets[i]);
+    }
+    set({picked:[]});toast(label+' '+targets.length+'개 완료');};
   const inView=n=>scopes[n.scope||'work']&&(!tag||(n.tags||[]).includes(tag));
   const visible=notes.filter(inView);
   const list=visible.slice().sort((a,b)=>b.updated.localeCompare(a.updated));
   /* 일괄 선택 */
   const toggle=id=>set({picked:picked.includes(id)?picked.filter(x=>x!==id):[...picked,id]});
   const allOn=list.length>0&&list.every(n=>picked.includes(n.id));
-  const bulkDelete=()=>{setDb('notes',notes.filter(n=>!picked.includes(n.id)));set({picked:[],sel:picked.includes(st.sel)?null:st.sel});toast(picked.length+'개 삭제됨');};
-  const bulkScope=sc=>{setDb('notes',notes.map(n=>picked.includes(n.id)?{...n,scope:sc,updated:nowStamp()}:n));set({picked:[]});toast(picked.length+'개 → '+SCOPE_LABEL[sc]);};
+  const bulkDelete=()=>{setDb('notes',arr=>arr.filter(n=>!picked.includes(n.id)));set({picked:[],sel:picked.includes(st.sel)?null:st.sel});toast(picked.length+'개 삭제됨');};
+  const bulkScope=sc=>{setDb('notes',arr=>arr.map(n=>picked.includes(n.id)?{...n,scope:sc,updated:nowStamp()}:n));set({picked:[]});toast(picked.length+'개 → '+SCOPE_LABEL[sc]);};
   const bulkTag=()=>{const t=prompt('추가할 태그 (쉼표로 여러 개)');if(!t)return;const add=t.split(',').map(x=>x.trim().replace(/^#/,'')).filter(Boolean);
-    setDb('notes',notes.map(n=>picked.includes(n.id)?{...n,tags:[...new Set([...(n.tags||[]),...add])],updated:nowStamp()}:n));set({picked:[]});toast('태그 추가됨');};
+    setDb('notes',arr=>arr.map(n=>picked.includes(n.id)?{...n,tags:[...new Set([...(n.tags||[]),...add])],updated:nowStamp()}:n));set({picked:[]});toast('태그 추가됨');};
 
   if(st.view==='graph')return <Card title="그래프 · 노트 연결" badge={<Badge tone="muted">{visible.length} 노드</Badge>}
       toolbar={<Button variant="gray" size="sm" onClick={()=>set({view:'notes'})}>← 노트로</Button>}
@@ -38076,12 +38195,17 @@ function KnowledgeView({db,setDb,st,set,toast}){
   return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
     toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span></>}
-    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy||!audioRefs(cur&&cur.md).length} onClick={()=>ai('stt')} title="이 노트에 붙은 녹음을 글로 옮기고, 이어서 정리·번역까지 자동으로 합니다">전사</Button><Button variant="secondary" size="sm" icon="🈯" disabled={!cur||st.aiBusy} onClick={()=>ai('polish')} title="받아쓴 글의 오탈자·고유명사를 바로잡고 문단을 나눕니다. 외국어면 한국어 번역과 요점을 붙입니다">정리·번역</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
+    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="제목·한 줄 정의·핵심·관련 링크·출처로 정돈하고 태그까지 붙입니다. 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy||!audioRefs(cur&&cur.md).length} onClick={()=>ai('stt')} title="이 노트에 붙은 녹음을 글로 옮기고, 이어서 정리·번역까지 자동으로 합니다">전사</Button><Button variant="secondary" size="sm" icon="🈯" disabled={!cur||st.aiBusy} onClick={()=>ai('polish')} title="받아쓴 글의 오탈자·고유명사를 바로잡고 문단을 나눕니다. 외국어면 한국어 번역과 요점을 붙입니다">정리·번역</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
     {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
       <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
       <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
       <Button variant="gray" size="xs" onClick={()=>bulkScope('personal')}>→ 개인</Button>
       <Button variant="gray" size="xs" onClick={bulkTag}># 태그 추가</Button>
+      <span style={{color:'var(--text-label)'}}>|</span>
+      <Button variant="secondary" size="xs" disabled={st.aiBusy} onClick={()=>bulkAi('wiki')} title="고른 노트를 차례로 위키 형식으로 정돈합니다">🤖 위키 정돈</Button>
+      <Button variant="secondary" size="xs" disabled={st.aiBusy} onClick={()=>bulkAi('polish')} title="고른 노트의 받아쓴 글을 차례로 교정·번역합니다">🈯 정리·번역</Button>
+      <Button variant="secondary" size="xs" disabled={st.aiBusy} onClick={()=>set({ingest:notes.filter(n=>picked.includes(n.id)).map(n=>({kind:'note',item:n}))})} title="고른 노트를 개념 노트에 합칩니다">🤖 위키에 수집</Button>
+      <span style={{color:'var(--text-label)'}}>|</span>
       <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
       <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
     <div style={{display:'grid',gridTemplateColumns:lw+'px 5px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
@@ -38094,7 +38218,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
       {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>노트를 선택하거나 새로 만드세요</div>:<NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onErr={m=>toast('⚠ '+m)} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{setDb('notes',notes.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/>}
     </div>
     <VaultModal open={!!st.vault} onClose={()=>set({vault:false})} db={db} setDb={setDb} toast={toast}/>
-    <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null})}/>
+    <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null,picked:[]})}/>
   </Card>;
 }
 function NoteRow({n,on,picked,onPick,onClick}){const [h,setH]=React.useState(false);const sc=n.scope||'work';
@@ -38468,7 +38592,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v3.8';
+const APP_VERSION='v4.1';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
@@ -38488,10 +38612,25 @@ function Shell({user,onLogout}){
     else if(Store.rowMigrated)setTimeout(()=>toast('행 단위 저장으로 전환 · '+Store.rowMigrated+'건 이관'),400);}).catch(e=>setErr('데이터 로드 실패: '+e.message+' — 테이블 SQL을 실행했는지 확인하세요'));},[]);
   React.useEffect(()=>localStorage.setItem('pms.zone',zone),[zone]);
   const toast=m=>{setToastMsg(m);clearTimeout(timers.current.t);timers.current.t=setTimeout(()=>setToastMsg(''),1600);};
-  const setDb=(kind,arr)=>{setDbRaw(d=>({...d,[kind]:arr}));setSaved('saving');clearTimeout(timers.current[kind]);timers.current[kind]=setTimeout(async()=>{try{await Store.persist(kind,arr);setSaved(new Date().toTimeString().slice(0,8));}catch(e){setSaved('error');toast('⚠ 저장 실패: '+e.message);}},700);};
+  /* 항상 "지금 저장된 값"을 기준으로 고친다 — 전사·정돈처럼 오래 걸리는 작업 중에 다른 화면에서 바뀐 내용이 되돌려지지 않도록.
+     arr 자리에 함수를 주면 (현재 배열)=>새 배열 로 계산한다 */
+  const dbRef=React.useRef(null);
+  const setDb=(kind,arrOrFn)=>{
+    const base=(dbRef.current&&dbRef.current[kind])||[];
+    const arr=typeof arrOrFn==='function'?arrOrFn(base):arrOrFn;
+    dbRef.current={...(dbRef.current||{}),[kind]:arr};
+    setDbRaw(d=>({...d,[kind]:arr}));
+    setSaved('saving');clearTimeout(timers.current[kind]);
+    timers.current[kind]=setTimeout(async()=>{try{await Store.persist(kind,(dbRef.current||{})[kind]||arr);setSaved(new Date().toTimeString().slice(0,8));}catch(e){setSaved('error');toast('⚠ 저장 실패: '+e.message);}},700);
+  };
+  React.useEffect(()=>{if(db)dbRef.current=db;},[db]);
   /* 휴지통에서 되살리기 — 평소 저장 경로를 그대로 타서 화면과 저장소가 함께 되돌아온다 */
-  const restoreItem=(kind,item)=>{if(!item)return;const cur=db[kind]||[];if(cur.some(x=>x.id===item.id))return;setDb(kind,[...cur,item]);};
-  const sendToNote=src=>{const n=newNote(src.subject,'work',`# ${src.subject}\n\n${src.from?'보낸 사람: '+src.from+'  \n':''}${src.date?'날짜: '+fmtDT(src.date)+'  \n':''}\n${src.body||''}\n\n---\n출처: ${src.from?'메일':'일정'}`);setDb('notes',[...db.notes,n]);setKbSt(s=>({...s,sel:n.id,view:'notes'}));setZone('kb');toast('노트로 저장');};
+  const restoreItem=(kind,item)=>{if(!item)return;setDb(kind,arr=>arr.some(x=>x.id===item.id)?arr:[...arr,item]);};
+  /* 메일·일정 → 노트. 화면은 그대로 두고 노트만 만든다(지식 화면으로 튀지 않게) */
+  const makeNote=src=>{const n=newNote(src.subject,'work',`# ${src.subject}\n\n${src.from?'보낸 사람: '+src.from+'  \n':''}${src.date?'날짜: '+fmtDT(src.date)+'  \n':''}\n${src.body||''}\n\n---\n출처: ${src.from?'메일':'일정'}`);setDb('notes',arr=>[...arr,n]);return n;};
+  const sendToNote=src=>{const n=makeNote(src);setKbSt(s=>({...s,sel:n.id,view:'notes'}));toast('노트로 저장 · 📘 지식에서 확인');return n;};
+  const sendManyToNote=srcs=>{const ns=srcs.map(s=>newNote(s.subject,'work',`# ${s.subject}\n\n${s.from?'보낸 사람: '+s.from+'  \n':''}${s.date?'날짜: '+fmtDT(s.date)+'  \n':''}\n${s.body||''}\n\n---\n출처: ${s.from?'메일':'일정'}`));
+    setDb('notes',arr=>[...arr,...ns]);setKbSt(s=>({...s,sel:ns[0]?ns[0].id:s.sel,view:'notes'}));toast(ns.length+'건을 노트로 저장 · 📘 지식에서 확인');return ns;};
   const sendToEvent=m=>{setCalSt(s=>({...s,edit:{...emptyEvent(todayISO()),title:m.subject,notes:'메일: '+m.from+'\n\n'+m.body.slice(0,300)}}));setZone('cal');};
   if(err)return <div style={{padding:40}}><InfoBar tone="warn">{err}</InfoBar><Button variant="gray" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button><SettingsModal open={cfgOpen} onClose={()=>setCfg(false)} onToast={toast}/></div>;
   if(!db)return <div style={{padding:40,color:'var(--text-label)'}}>데이터 불러오는 중…</div>;
@@ -38509,7 +38648,7 @@ function Shell({user,onLogout}){
     <div style={{display:'flex',alignItems:'stretch',flex:1,minHeight:'calc(100vh - 90px)'}}>
       <NavSidebar sections={nav}/>
       <main style={{flex:1,minWidth:0,padding:'var(--pad-content)'}}>
-        {zone==='mail'&&<MailView db={db} setDb={setDb} st={mailSt} set={merge(setMailSt)} toast={toast} sendToNote={sendToNote} sendToEvent={sendToEvent} openSettings={()=>setCfg(true)}/>}
+        {zone==='mail'&&<MailView db={db} setDb={setDb} st={mailSt} set={merge(setMailSt)} toast={toast} sendToNote={sendToNote} sendManyToNote={sendManyToNote} sendToEvent={sendToEvent} openSettings={()=>setCfg(true)}/>}
         {zone==='cal'&&<CalendarView db={db} setDb={setDb} st={calSt} set={merge(setCalSt)} toast={toast} sendToNote={sendToNote}/>}
         {zone==='kb'&&<KnowledgeView db={db} setDb={setDb} st={kbSt} set={merge(setKbSt)} toast={toast}/>}
       </main>
