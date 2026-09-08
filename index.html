@@ -36520,7 +36520,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.7'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.8'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -37069,7 +37069,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     {step&&<InfoBar>{step}</InfoBar>}
     {err&&<InfoBar tone="warn">읽지 못한 파일: {err}</InfoBar>}
     <InfoBar>외부에서는 OWA 메일을 열어 헤더(보낸 사람/받는 사람/제목/날짜)와 본문을 그대로 복사해 아래에 붙여넣으세요.</InfoBar>
-    <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12px/1.5 var(--font-mono)'}}/>
+    <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
 Object.assign(window,{MailView,mailNav,FOLDERS,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
@@ -37633,12 +37633,12 @@ function IngestModal({open,sources,db,setDb,onClose,toast}){
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,maxHeight:'46vh',overflow:'auto'}}>
         <div>
           <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>지금</div>
-          <pre style={{font:'11.5px/1.6 var(--font-mono)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-default)',background:'var(--surface-hover)'}}>
+          <pre style={{font:'12px/1.65 var(--font-sans)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-default)',background:'var(--surface-hover)'}}>
             {p.before?beforeL.map((l,k)=><div key={k} style={{background:l.trim()&&!aset.has(l)?'var(--color-danger-surface)':'transparent'}}>{l||' '}</div>):<span style={{color:'var(--text-label)'}}>(새로 만드는 노트)</span>}</pre>
         </div>
         <div>
           <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>바뀐 뒤</div>
-          <pre style={{font:'11.5px/1.6 var(--font-mono)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-strong)'}}>
+          <pre style={{font:'12px/1.65 var(--font-sans)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-strong)'}}>
             {afterL.map((l,k)=><div key={k} style={{background:l.trim()&&!bset.has(l)?'var(--wb-yellow-hl)':'transparent'}}>{l||' '}</div>)}</pre>
         </div>
       </div>
@@ -38157,7 +38157,7 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,onErr,titles=[]
       <Button variant="ghost" size="xs" onClick={onDelete}>🗑</Button>
     </div>
     <div ref={paneRef} style={{display:'grid',gridTemplateColumns:showEd&&showPv?`minmax(0,${ep}fr) 5px minmax(0,${100-ep}fr)`:'minmax(0,1fr)',flex:1,minHeight:0}}>
-      {showEd&&<div style={{position:'relative',display:'flex',flexDirection:'column',minWidth:0}}><textarea ref={tRef} value={md} onChange={onChange} onKeyDown={onKey} onBlur={()=>setTimeout(()=>setAc(null),150)} onPaste={onPaste} onDrop={onDropFile} onDragOver={e=>{if(e.dataTransfer.types.includes('Files'))e.preventDefault();}} spellCheck={false} style={{flex:1,border:'none',outline:'none',resize:'none',padding:'16px 18px',font:'13px/1.7 var(--font-mono)',color:'var(--text-body)',minHeight:'calc(100vh - 340px)',background:'#fff'}}/>
+      {showEd&&<div style={{position:'relative',display:'flex',flexDirection:'column',minWidth:0}}><textarea ref={tRef} value={md} onChange={onChange} onKeyDown={onKey} onBlur={()=>setTimeout(()=>setAc(null),150)} onPaste={onPaste} onDrop={onDropFile} onDragOver={e=>{if(e.dataTransfer.types.includes('Files'))e.preventDefault();}} spellCheck={false} style={{flex:1,border:'none',outline:'none',resize:'none',padding:'16px 18px',font:'13.5px/1.75 var(--font-sans)',color:'var(--text-body)',minHeight:'calc(100vh - 340px)',background:'#fff'}}/>
         {ac&&<div style={{position:'absolute',left:18,top:10,zIndex:5,background:'#fff',border:'1px solid var(--border-strong)',boxShadow:'var(--shadow-popover)',borderRadius:6,minWidth:220,maxWidth:360,fontSize:'var(--fs-base)'}}>
           <div style={{padding:'4px 10px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderBottom:'1px solid var(--border-default)'}}>{ac.type==='link'?'🔗 노트 링크':'# 태그'} · ↑↓ 이동 · Enter 선택 · Esc 닫기</div>
           {ac.items.map((it,i)=><div key={it} onMouseDown={e=>{e.preventDefault();accept(it);}} onMouseEnter={()=>setAc({...ac,idx:i})} style={{padding:'5px 10px',cursor:'pointer',background:i===ac.idx?'var(--surface-active)':'transparent',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{ac.type==='link'?'📄 ':'# '}{it}</div>)}
@@ -38192,7 +38192,7 @@ function SearchView({notes,onPick,onWiki}){
     {hits.map(h=><div key={h.n.id} onClick={()=>setSel(h.n.id)} onDoubleClick={()=>onPick(h.n.id)}
       style={{padding:'10px 12px',border:'1px solid '+(h.n.id===sel?'var(--border-strong)':'var(--border-default)'),background:h.n.id===sel?'var(--surface-active)':'#fff',marginBottom:6,cursor:'pointer',borderRadius:4}}>
       <div style={{fontWeight:600,fontSize:'var(--fs-md)'}}>📄 {hl(h.n.title)} <span style={{color:SCOPE_COLOR[h.n.scope||'work'],fontWeight:400,fontSize:'var(--fs-sm)'}}>● {SCOPE_LABEL[h.n.scope||'work']}</span></div>
-      {h.ls.map(([l,i])=><div key={i} style={{color:'var(--text-muted)',marginTop:3,fontFamily:'var(--font-mono)',fontSize:12}}><span style={{color:'var(--text-label)',marginRight:8}}>{i+1}</span>{hl(l)}</div>)}</div>)}
+      {h.ls.map(([l,i])=><div key={i} style={{color:'var(--text-muted)',marginTop:3,fontFamily:'var(--font-sans)',fontSize:12}}><span style={{color:'var(--text-label)',marginRight:8}}>{i+1}</span>{hl(l)}</div>)}</div>)}
     {q&&!hits.length&&<div style={{color:'var(--text-label)',padding:20,textAlign:'center'}}>결과 없음</div>}
     {!q&&<div style={{color:'var(--text-label)',padding:20,textAlign:'center'}}>검색어를 입력하세요 · 결과를 누르면 오른쪽에 노트가 열립니다</div>}</>;
   return <Card title="전문 검색" badge={q&&<Badge tone="muted">{hits.length}개 노트</Badge>}
@@ -38468,7 +38468,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v3.7';
+const APP_VERSION='v3.8';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
