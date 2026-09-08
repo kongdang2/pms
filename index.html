@@ -36076,7 +36076,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.5'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.6'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36965,6 +36965,188 @@ function LintView({db,setDb,toast,onOpenNote}){
 Object.assign(window,{RULES_TITLE,RULES_TEMPLATE,getRulesNote,wikiRules,wikiAsk,wikiIngest,wikiLint,
   wRetrieve,AskView,IngestModal,LintView,srcTitle,srcLabel});
 </script>
+<script type="text/babel">/* ── 옵시디언 호환 vault 내보내기·가져오기 ────────────────────────
+   이 앱이 없어져도 지식은 남는다 — 노트를 폴더 구조의 .md 묶음(ZIP)으로 내보내고 다시 읽어들인다.
+   ZIP 만들기·풀기를 직접 구현했다(외부 라이브러리 없음). 압축 없이 저장(store)하고,
+   남이 만든 ZIP은 브라우저 내장 DecompressionStream으로 푼다. */
+
+/* CRC-32 — ZIP이 요구하는 검사값 */
+function crc32(buf){
+  let t=crc32.t;
+  if(!t){t=crc32.t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0;}}
+  let crc=0xFFFFFFFF;for(let i=0;i<buf.length;i++)crc=(crc>>>8)^t[(crc^buf[i])&255];
+  return (crc^0xFFFFFFFF)>>>0;
+}
+/* [{name,text}] → ZIP Blob (압축 없이 저장) */
+function zipMake(files){
+  const enc=new TextEncoder();const body=[],central=[];let off=0;
+  files.forEach(f=>{
+    const name=enc.encode(f.name),data=enc.encode(f.text),crc=crc32(data);
+    const lh=new Uint8Array(30+name.length),dv=new DataView(lh.buffer);
+    dv.setUint32(0,0x04034b50,true);dv.setUint16(4,20,true);dv.setUint16(6,0x0800,true); /* 0x0800 = 이름이 UTF-8 */
+    dv.setUint32(14,crc,true);dv.setUint32(18,data.length,true);dv.setUint32(22,data.length,true);
+    dv.setUint16(26,name.length,true);
+    lh.set(name,30);body.push(lh,data);
+    const ch=new Uint8Array(46+name.length),cv=new DataView(ch.buffer);
+    cv.setUint32(0,0x02014b50,true);cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint16(8,0x0800,true);
+    cv.setUint32(16,crc,true);cv.setUint32(20,data.length,true);cv.setUint32(24,data.length,true);
+    cv.setUint16(28,name.length,true);cv.setUint32(42,off,true);
+    ch.set(name,46);central.push(ch);
+    off+=lh.length+data.length;});
+  let csize=0;central.forEach(c=>csize+=c.length);
+  const end=new Uint8Array(22),ev=new DataView(end.buffer);
+  ev.setUint32(0,0x06054b50,true);ev.setUint16(8,files.length,true);ev.setUint16(10,files.length,true);
+  ev.setUint32(12,csize,true);ev.setUint32(16,off,true);
+  return new Blob([...body,...central,end],{type:'application/zip'});
+}
+/* ZIP → [{name,text}] (.md 파일만) */
+async function zipRead(ab){
+  const u=new Uint8Array(ab),dv=new DataView(ab),dec=new TextDecoder();
+  let e=-1;for(let i=u.length-22;i>=0&&i>u.length-70000;i--)if(dv.getUint32(i,true)===0x06054b50){e=i;break;}
+  if(e<0)throw new Error('ZIP 파일이 아닙니다');
+  const n=dv.getUint16(e+10,true);let p=dv.getUint32(e+16,true);const out=[];
+  for(let i=0;i<n;i++){
+    const nl=dv.getUint16(p+28,true),el=dv.getUint16(p+30,true),cl=dv.getUint16(p+32,true);
+    const method=dv.getUint16(p+10,true),csize=dv.getUint32(p+20,true),lo=dv.getUint32(p+42,true);
+    const name=dec.decode(u.slice(p+46,p+46+nl));
+    p+=46+nl+el+cl;
+    if(!/\.(md|markdown|txt)$/i.test(name))continue;
+    const start=lo+30+dv.getUint16(lo+26,true)+dv.getUint16(lo+28,true);
+    const raw=u.slice(start,start+csize);
+    let text;
+    if(method===0)text=dec.decode(raw);
+    else if(method===8){
+      if(!window.DecompressionStream)throw new Error('이 브라우저는 ZIP 압축 해제를 못 합니다 — 압축을 풀어 .md 파일들을 드롭하세요');
+      const ds=new DecompressionStream('deflate-raw');
+      text=dec.decode(await new Response(new Blob([raw]).stream().pipeThrough(ds)).arrayBuffer());}
+    else throw new Error('지원하지 않는 압축 방식입니다 — 압축을 풀어 .md 파일들을 드롭하세요');
+    out.push({name,text});}
+  return out;
+}
+/* ── 머리말(YAML frontmatter) ── */
+function fmParse(md){
+  const m=/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(md||'');
+  if(!m)return {meta:{},body:md||''};
+  const meta={};
+  m[1].split(/\r?\n/).forEach(l=>{const i=l.indexOf(':');if(i<0)return;
+    const k=l.slice(0,i).trim();let v=l.slice(i+1).trim();
+    if(/^\[.*\]$/.test(v))meta[k]=v.slice(1,-1).split(',').map(x=>x.trim().replace(/^["']|["']$/g,'')).filter(Boolean);
+    else meta[k]=v.replace(/^["']|["']$/g,'');});
+  return {meta,body:(md||'').slice(m[0].length)};
+}
+const yamlVal=v=>Array.isArray(v)?'['+v.join(', ')+']':(/[:#]/.test(String(v))?'"'+v+'"':String(v));
+const fmBuild=o=>'---\n'+Object.entries(o).filter(([,v])=>v!==undefined&&v!=='').map(([k,v])=>k+': '+yamlVal(v)).join('\n')+'\n---\n\n';
+/* 파일 이름으로 쓸 수 없는 글자 정리 */
+const safeName=s=>(s||'제목 없음').replace(/[\\/:*?"<>|#^[\]]/g,' ').replace(/\s+/g,' ').trim().slice(0,80)||'제목 없음';
+
+const VAULT_README=`# 개인 업무 위키 vault
+
+개인 업무 관리 시스템에서 내보낸 노트입니다. 이 폴더를 그대로 **옵시디언에서 "폴더를 vault로 열기"** 하면 바로 읽힙니다.
+
+- \`업무/\`, \`개인/\` — 노트. 파일 첫머리의 \`---\` 사이는 제목·태그·수정일이며 옵시디언이 속성으로 읽습니다
+- \`[[제목]]\` 링크와 \`#태그\`는 옵시디언에서 그대로 동작합니다
+- \`메일/\`, \`일정/\` — 함께 내보냈다면 기록용 사본입니다
+
+다시 앱으로 가져오려면 지식 › 노트 › **가져오기**에 이 ZIP(또는 .md 파일들)을 넣으면 됩니다.
+`;
+
+/* db → 내보낼 파일 목록 */
+function vaultFiles(db,opt){
+  const files=[{name:'README.md',text:VAULT_README}];
+  const used={};
+  const uniq=p=>{if(!used[p]){used[p]=1;return p;}used[p]++;return p.replace(/\.md$/,'')+' ('+used[p]+').md';};
+  (db.notes||[]).forEach(n=>{
+    const scope=n.scope==='personal'?'개인':'업무';
+    const [main,raw]=splitRaw(n.md||'');
+    const text=fmBuild({title:n.title,scope,tags:n.tags||[],updated:(n.updated||'').slice(0,19)})
+      +(opt.raw?(n.md||''):main).replace(/^\s+/,'');
+    files.push({name:uniq(scope+'/'+safeName(n.title)+'.md'),text});
+  });
+  if(opt.mails)(db.mails||[]).forEach(m=>{
+    const d=String(m.date||'').slice(0,10);
+    const text=fmBuild({title:m.subject,type:'mail',from:m.from,to:m.to,date:String(m.date||'').slice(0,19),tags:m.tags||[]})
+      +'# '+(m.subject||'(제목 없음)')+'\n\n'+(m.body||'')+((m.attachments||[]).length?'\n\n첨부: '+m.attachments.join(', '):'');
+    files.push({name:uniq('메일/'+d+' '+safeName(m.subject)+'.md'),text});
+  });
+  if(opt.events)(db.events||[]).forEach(e=>{
+    const ms=(e.milestones||[]).filter(m=>m&&m.date).map(m=>'- '+m.date+' '+(m.title||''));
+    const text=fmBuild({title:e.title,type:'event',date:e.date,start:e.start,end:e.end,
+      calendar:e.cal==='personal'?'개인':'회사',status:STATUS_LABEL[e.status]||e.status,category:e.category||''})
+      +'# '+(e.title||'(제목 없음)')+'\n\n'+(ms.length?'## 마일스톤\n'+ms.join('\n')+'\n\n':'')+(e.notes||'');
+    files.push({name:uniq('일정/'+String(e.date||'').slice(0,7)+' '+safeName(e.title)+'.md'),text});
+  });
+  return files;
+}
+/* 읽어들인 .md 텍스트 → 노트 객체 */
+function fileToNote(name,text){
+  const {meta,body}=fmParse(text);
+  const base=name.split('/').pop().replace(/\.(md|markdown|txt)$/i,'');
+  const title=meta.title||(/^#\s+(.+)$/m.exec(body)||[])[1]||base;
+  const scope=/개인|personal/i.test(meta.scope||name.split('/')[0]||'')?'personal':'work';
+  let tags=meta.tags||[];if(typeof tags==='string')tags=tags.split(/[, ]+/).filter(Boolean);
+  return {title:String(title).trim(),scope,tags:tags.map(t=>String(t).replace(/^#/,'')),
+    md:body.trim()?body:'# '+title+'\n',updated:meta.updated||nowStamp()};
+}
+/* 파일들 → 기존 노트에 병합. same=true 면 같은 제목은 갱신, false 면 새 노트로 */
+function mergeNotes(notes,items,same){
+  let add=0,upd=0;let out=notes.slice();
+  items.forEach(it=>{
+    if(/^README/i.test(it.name))return;
+    const n=fileToNote(it.name,it.text);
+    if(n.title===RULES_TITLE&&out.some(x=>x.title===RULES_TITLE)){ /* 규칙 노트는 덮어쓰지 않는다 */ }
+    const hit=same?out.find(x=>x.title===n.title):null;
+    if(hit){out=out.map(x=>x.id===hit.id?{...x,md:n.md,tags:[...new Set([...(x.tags||[]),...n.tags])],scope:n.scope,updated:nowStamp()}:x);upd++;}
+    else{out.push(newNote(n.title,n.scope,n.md,n.tags));add++;}});
+  return {notes:out,add,upd};
+}
+/* ── 화면 ── */
+function VaultModal({open,onClose,db,setDb,toast}){
+  const {Modal,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [opt,setOpt]=React.useState({mails:false,events:false,raw:true,same:true});
+  const [busy,setBusy]=React.useState('');
+  if(!open)return null;
+  const set=k=>e=>setOpt(o=>({...o,[k]:e.target.checked}));
+  const files=vaultFiles(db,opt);
+  const doExport=()=>{const blob=zipMake(files);const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download='pms-vault-'+todayISO()+'.zip';a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),4000);toast(files.length+'개 파일을 ZIP으로 내보냈습니다');};
+  const doImport=async fs=>{setBusy('가져오는 중…');
+    try{
+      let items=[];
+      for(const f of fs){
+        if(/\.zip$/i.test(f.name))items=items.concat(await zipRead(await f.arrayBuffer()));
+        else items.push({name:f.name,text:await f.text()});}
+      if(!items.length){toast('읽을 .md 파일이 없습니다');setBusy('');return;}
+      const r=mergeNotes(db.notes,items,opt.same);
+      setDb('notes',r.notes);toast('새 노트 '+r.add+'개 · 갱신 '+r.upd+'개');onClose();
+    }catch(e){toast('⚠ '+e.message);}
+    setBusy('');};
+  const row=(k,label,desc)=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'7px 10px',border:'1px solid var(--border-default)',borderRadius:4,cursor:'pointer',marginBottom:6}}>
+    <input type="checkbox" checked={!!opt[k]} onChange={set(k)} style={{marginTop:3}}/>
+    <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{desc}</div></span></label>;
+  return <Modal open={open} onClose={onClose} title="📦 vault 내보내기 · 가져오기" width={640}
+    footer={<><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{files.length}개 파일</span>
+      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <Button variant="gray" onClick={onClose}>닫기</Button>
+        <Button icon="📦" disabled={!!busy} onClick={doExport}>ZIP 내보내기</Button></span></>}>
+    <InfoBar>노트를 <b>폴더 구조의 .md 묶음</b>으로 내보냅니다. 압축을 풀고 그 폴더를 옵시디언에서 「폴더를 vault로 열기」 하면 <code>[[링크]]</code>·<code>#태그</code>가 그대로 살아납니다. 이 앱을 쓰지 않게 되어도 지식은 남습니다.</InfoBar>
+    <div style={{margin:'10px 0 4px',font:'var(--type-card-title)'}}>내보낼 것</div>
+    {row('raw','원문 메모까지 포함','위키로 정돈한 노트 아래에 접어 둔 원본 기록까지 함께 내보냅니다')}
+    {row('mails','메일도 함께','메일/ 폴더에 날짜 + 제목으로 한 건씩 저장합니다(기록용 사본)')}
+    {row('events','일정도 함께','일정/ 폴더에 월 + 제목으로 저장하고 마일스톤을 목록으로 적습니다')}
+    <div style={{margin:'14px 0 4px',font:'var(--type-card-title)'}}>가져오기</div>
+    {row('same','제목이 같으면 갱신','끄면 같은 제목이어도 새 노트로 추가합니다(옵시디언에서 고친 내용을 되돌릴 때는 켜 두세요)')}
+    <div style={{display:'flex',gap:8,alignItems:'center'}}>
+      <Button variant="classic" icon="📥" disabled={!!busy} onClick={()=>document.getElementById('vaultIn').click()}>{busy||'ZIP · .md 가져오기'}</Button>
+      <input id="vaultIn" type="file" accept=".zip,.md,.markdown,.txt" multiple style={{display:'none'}}
+        onChange={e=>{doImport([...e.target.files]);e.target.value='';}}/>
+      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>내보낸 ZIP을 그대로 넣어도 되고, 옵시디언에서 고친 .md 파일만 넣어도 됩니다</span>
+    </div>
+  </Modal>;
+}
+Object.assign(window,{zipMake,zipRead,fmParse,fmBuild,vaultFiles,fileToNote,mergeNotes,VaultModal,safeName,crc32});
+</script>
 <script type="text/babel">/* 지식 관리: 업무/개인 · 마크다운 편집+미리보기 · 위키링크/백링크 · 그래프 · 검색 · Claude */
 const SCOPES=['work','personal'];
 const SCOPE_LABEL={work:'업무',personal:'개인'};
@@ -37080,9 +37262,9 @@ function KnowledgeView({db,setDb,st,set,toast}){
   if(st.view==='search')return <SearchView notes={notes} onPick={id=>set({sel:id,view:'notes'})} onWiki={openByTitle}/>;
   const mode=st.mode||'split';
   return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
-    toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>document.getElementById('mdImport').click()}>.md 가져오기</Button><input id="mdImport" type="file" accept=".md,.txt" multiple style={{display:'none'}} onChange={e=>importMd([...e.target.files])}/>
+    toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span></>}
-    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📥" onClick={exportAll}>전체</Button></>}>
+    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
     {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
       <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
       <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
@@ -37099,6 +37281,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
       <Splitter onDrag={dx=>setLw(w=>Math.max(170,Math.min(600,w+dx)))} onReset={resetLw}/>
       {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>노트를 선택하거나 새로 만드세요</div>:<NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{setDb('notes',notes.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/>}
     </div>
+    <VaultModal open={!!st.vault} onClose={()=>set({vault:false})} db={db} setDb={setDb} toast={toast}/>
     <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null})}/>
   </Card>;
 }
@@ -37448,7 +37631,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v2.5';
+const APP_VERSION='v2.6';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
