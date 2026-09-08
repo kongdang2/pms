@@ -35985,31 +35985,26 @@ Store.transcribe=async function(blob,opt={}){
       : 'Supabase를 연결하거나 설정 › 음성에 OpenAI API 키를 입력하세요');
   }catch(e){throw new Error(explainSttError(e));}
 };
-/* Paraformer(DashScope) — 파일 주소를 넘기고 결과를 기다린다 */
-/* 콘솔이 알려주는 API Host 는 뒤에 /compatible-mode/v1 같은 경로가 붙어 오기도 한다 → 호스트만 남긴다 */
+/* Alibaba Qwen3-ASR — 음성 조각을 base64로 직접 보낸다(주소를 쓰지 않는다) */
 function dashBase(v){
   let b=String(v||'').trim();if(!b)return '';
   if(!/^https?:\/\//i.test(b))b='https://'+b;
   try{return 'https://'+new URL(b).hostname;}catch(_){return '';}
 }
-Store.dashscope=async function(action,payload){
-  if(this.mode!=='supabase')throw new Error('Paraformer는 클라우드 모드에서만 씁니다 — 파일 주소를 넘겨야 하기 때문입니다');
+Store.dashAsr=async function(blob,opt={}){
+  if(this.mode!=='supabase')throw new Error('Alibaba 전사는 클라우드(Supabase) 연결이 필요합니다 — 키가 서버에 있기 때문입니다');
   const base=dashBase(this.cfg.dashBase);
-  if(this.cfg.dashBase&&!base)throw new Error('서비스 주소를 읽지 못했습니다 — 설정 › 음성의 서비스 주소를 비우면 기본 주소를 씁니다 (받은 값: '+this.cfg.dashBase+')');
-  const req={action,base,model:this.cfg.dashModel||'qwen3-asr-flash-filetrans',...payload};
-  console.log('[PMS 전사 요청]',req);
+  if(this.cfg.dashBase&&!base)throw new Error('서비스 주소를 읽지 못했습니다 (설정 › 음성) — 비워두면 기본 주소를 씁니다');
+  const audio=await blobB64(blob);
+  const req={base,model:this.cfg.dashModel||'qwen3-asr-flash',mime:blob.type||'audio/mpeg',
+    language:opt.language||this.cfg.sttLang||'zh',context:opt.context||this.cfg.sttHint||'',audio};
+  console.log('[PMS 전사 요청]',{...req,audio:'base64 '+Math.round(audio.length/1024)+'KB'});
   const {data,error}=await this.sb.functions.invoke('paraformer',{body:req});
   console.log('[PMS 전사 응답]',data||error);
   if(error){let d='';try{const j=await error.context?.json();d=j&&j.error;}catch(_){}
-    throw new Error(d||(/Failed to send|FunctionsFetchError/i.test(error.message)?"Edge Function 'paraformer'를 찾지 못했습니다 — 대시보드에 paraformer 이름으로 배포하세요 (가이드 11)":error.message));}
-  if(data&&data.error){
-    let m=data.error;
-    if(/base 주소/.test(m))m+=' (보낸 값: '+(base||'기본값')+')';
-    else if(/model.*not.*exist/i.test(m)&&!/리전/.test(m))
-      m='이 리전에 없는 모델입니다 — 설정 › 음성에서 모델을 qwen3-asr-flash(싱가포르)로 바꾸거나, 서비스 주소를 베이징(https://dashscope.aliyuncs.com)으로 바꾸세요. (원문: '+m+')';
-    throw new Error(m);
-  }
-  return data;
+    throw new Error(d||(/Failed to send|FunctionsFetchError/i.test(error.message)?"Edge Function 'paraformer'를 찾지 못했습니다 — 대시보드에 paraformer 이름으로 배포하세요":error.message));}
+  if(data&&data.error)throw new Error(data.error);
+  return (data&&data.text)||'';
 };
 async function testStt(){ /* 1초짜리 무음을 보내 연결만 확인 */
   const rate=16000,n=rate;const s=new Float32Array(n);
@@ -36345,9 +36340,11 @@ const blobB64=blob=>new Promise((ok,err)=>{const r=new FileReader();r.onload=()=
 /* 한 파일 전사 — 필요하면 잘라서 차례로 */
 async function transcribeBlob(blob,opt={}){
   const onStep=opt.onStep||(()=>{});
+  const alibaba=Store.cfg.sttEngine==='paraformer';
   let parts;
-  const conv=needConvert(blob,opt.srcName);
-  if(blob.size<=ONESHOT_MAX&&!conv)parts=[blob];
+  const conv=needConvert(blob,opt.srcName)&&!alibaba;   /* Alibaba 는 형식을 가리지 않는다 */
+  const oneshot=alibaba?6*1024*1024:ONESHOT_MAX;
+  if(blob.size<=oneshot&&!conv)parts=[blob];
   else{
     onStep(conv&&blob.size<=ONESHOT_MAX?'형식을 바꾸는 중…':'긴 녹음을 자르는 중…');
     try{parts=await toWavSegments(blob,onStep);}
@@ -36362,41 +36359,20 @@ async function transcribeBlob(blob,opt={}){
   const texts=[];
   for(let i=0;i<parts.length;i++){
     onStep('전사 중 '+(i+1)+'/'+parts.length+(parts.length>1?' 조각':''));
-    const t=await Store.transcribe(parts[i],{
-      name:(opt.name||'audio')+(parts.length>1?('.part'+(i+1)):''),
-      language:opt.language||Store.cfg.sttLang||'ko',
-      /* 첫 조각엔 용어 힌트, 그다음부터는 앞 조각의 끝 문장 — 이름·용어가 이어지게 */
-      prompt:texts.length?texts[texts.length-1].slice(-400):(Store.cfg.sttHint||''),
-    });
+    /* 첫 조각엔 용어 힌트, 그다음부터는 앞 조각의 끝 문장 — 이름·용어가 이어지게 */
+    const hint=texts.length?texts[texts.length-1].slice(-400):(Store.cfg.sttHint||'');
+    const t=alibaba
+      ? await Store.dashAsr(parts[i],{language:opt.language||Store.cfg.sttLang||'zh',context:hint})
+      : await Store.transcribe(parts[i],{
+          name:(opt.name||'audio')+(parts.length>1?('.part'+(i+1)):''),
+          language:opt.language||Store.cfg.sttLang||'ko',prompt:hint});
     texts.push((t||'').trim());
   }
   return texts.filter(Boolean).join('\n\n');
 }
-/* Paraformer 경로 — 파일을 올리지 않고 1시간짜리 서명 주소만 넘긴다(길이 제한 없음) */
-async function paraformerTranscribe(path,opt={}){
-  const onStep=opt.onStep||(()=>{});
-  if(!Files.cloud)throw new Error('Alibaba 전사는 클라우드 저장소의 파일만 처리할 수 있습니다(로컬 모드 불가)');
-  onStep('보낼 사본 만드는 중…');
-  const langs=[(Store.cfg.sttLang&&Store.cfg.sttLang!=='auto')?Store.cfg.sttLang:'zh','en'];
-  /* 저장소 경로를 넘기면 서버가 "물음표 없는 깨끗한 주소"를 만들어 준다(끝나면 지움) */
-  const {task_id,tmp}=await Store.dashscope('submit',{path,languages:[...new Set(langs)],
-    diarize:!!Store.cfg.dashDiarize});
-  onStep('받아쓰는 중…');
-  const t0=Date.now();
-  for(let i=0;;i++){
-    await new Promise(r=>setTimeout(r,i<3?3000:5000));
-    const r=await Store.dashscope('query',{task_id,tmp});
-    if(r.status==='SUCCEEDED')return (r.text||'').trim();
-    if(r.status==='FAILED')throw new Error('Paraformer 처리 실패 — '+(r.error||''));
-    onStep('받아쓰는 중… '+Math.round((Date.now()-t0)/1000)+'초');
-    if(Date.now()-t0>25*60000)throw new Error('시간이 너무 오래 걸립니다 — 파일을 나눠서 올려보세요');
-  }
-}
 /* 엔진 골라 부르기 */
 async function transcribeAttachment(path,opt={}){
-  return (Store.cfg.sttEngine==='paraformer')
-    ? paraformerTranscribe(path,opt)
-    : transcribeBlob(await Files.blob(path),{...opt,srcName:path});
+  return transcribeBlob(await Files.blob(path),{...opt,srcName:path});
 }
 /* 노트 본문에서 음성 첨부 찾기 */
 const audioRefs=md=>pmsRefs(md).filter(r=>AUDIO_EXT.test(r.path)||/🎙/.test(r.raw));
@@ -36443,7 +36419,7 @@ function RecButton({onDone,onErr}){
     ? <Button variant="danger" size="xs" onClick={stop} title="녹음 정지">■ {mmss(sec)}</Button>
     : <Button variant="ghost" size="xs" onClick={start} title="이 노트에 음성 녹음 (15분마다 자동으로 조각냅니다)">● 녹음</Button>;
 }
-Object.assign(window,{paraformerTranscribe,transcribeAttachment,AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,RecButton,mmss,blobB64,SEG_SEC});
+Object.assign(window,{transcribeAttachment,AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,RecButton,mmss,blobB64,SEG_SEC});
 </script>
 <script type="text/babel">/* Gmail 연동: Google Identity Services(브라우저 OAuth 토큰) + Gmail REST API
    흐름: 연결(승인 창) → 토큰(1시간) → 받은편지함/보낸편지함 가져오기 · 보내기
@@ -36534,7 +36510,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.5.3'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.6'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36650,22 +36626,10 @@ function SttTab({c,setC}){
     <InfoBar>준비: ① platform.openai.com에서 API 키 발급 · 결제 수단 등록 ② Supabase 대시보드 › Edge Functions에 <code>transcribe</code> 함수 배포(소스 묶음의 supabase/functions/transcribe/index.ts) ③ Edge Functions › Secrets에 <code>OPENAI_API_KEY</code> 추가 — 가이드 11</InfoBar>
     <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>전사 엔진</div>
     <Eng id="openai" label="OpenAI (gpt-transcribe)" sub="한국어·영어에 무난합니다. 앱이 파일을 잘라 올립니다"/>
-    <Eng id="paraformer" label="Alibaba (Qwen3-ASR · Paraformer)" sub="중국어 정확도가 가장 좋습니다. 파일을 자르지 않고 주소만 넘겨 통째로 처리(12시간·2GB까지). 클라우드 저장소 연결 필수"/>
+    <Eng id="paraformer" label="Alibaba Qwen3-ASR · 중국어 특화" sub="중국어 정확도가 가장 좋습니다. 앱이 조각으로 잘라 보냅니다(길이 제한 없음). Supabase 연결 필요"/>
     {engine==='paraformer'&&<>
-      <InfoBar>준비: ① <b>modelstudio.console.alibabacloud.com/ap-southeast-1</b>(싱가포르) › API Key › Create — 키와 함께 나오는 <b>API Host</b>도 복사 ② Edge Function <code>paraformer</code> 배포 ③ Supabase Secrets에 <code>DASHSCOPE_API_KEY</code> 추가 ④ 아래 서비스 주소에 API Host 붙여넣기(비워두면 기본 주소). 첨부가 <b>클라우드 저장소</b>에 있어야 합니다(로컬 모드 불가).<br/><b>리전 주의</b> — 싱가포르 키에서는 <code>qwen3-asr-flash</code>·<code>fun-asr</code>만 됩니다. <code>paraformer</code>는 베이징(dashscope.aliyuncs.com) 전용이라 싱가포르에서 고르면 「Model not exist」가 납니다.</InfoBar>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-        <Field label="서비스 주소 (콘솔이 알려주는 API Host)"><TextInput value={c.dashBase||''} onChange={e=>setC({...c,dashBase:e.target.value.trim()})} placeholder="비워두면 https://dashscope-intl.aliyuncs.com"/></Field>
-        <Field label="모델"><Select options={[
-          {id:'qwen3-asr-flash-filetrans',label:'qwen3-asr-flash · 싱가포르 (권장)'},
-          {id:'qwen-audio-3.0-asr-flash-filetrans',label:'qwen-audio-3.0-asr-flash · 싱가포르'},
-          {id:'fun-asr',label:'fun-asr · 싱가포르'},
-          {id:'paraformer-v2',label:'paraformer-v2 · 베이징 전용'},
-          {id:'paraformer-8k-v2',label:'paraformer-8k-v2 · 베이징 전용(전화음질)'},
-        ]} value={c.dashModel||'qwen3-asr-flash-filetrans'} onChange={v=>setC({...c,dashModel:v})} style={{width:'100%'}}/></Field>
-      </div>
-      <label style={{display:'flex',gap:8,alignItems:'center',padding:'6px 10px',border:'1px solid var(--border-default)',borderRadius:4,marginBottom:8}}>
-        <input type="checkbox" checked={!!c.dashDiarize} onChange={e=>setC({...c,dashDiarize:e.target.checked})}/>
-        <span style={{fontSize:'var(--fs-md)'}}>화자 구분해서 받아쓰기</span></label>
+      <InfoBar>준비: ① <b>modelstudio.console.alibabacloud.com/ap-southeast-1</b>(싱가포르) › API Key › Create ② Edge Function <code>paraformer</code> 배포 ③ Supabase Secrets에 <code>DASHSCOPE_API_KEY</code> 추가. 모델은 <b>qwen3-asr-flash</b>를 씁니다 — 음성 조각을 직접 보내므로 공개 주소나 별도 버킷이 필요 없습니다.</InfoBar>
+      <Field label="서비스 주소 (비워두면 싱가포르 기본값)"><TextInput value={c.dashBase||''} onChange={e=>setC({...c,dashBase:e.target.value.trim()})} placeholder="https://dashscope-intl.aliyuncs.com"/></Field>
     </>}
     <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>{engine==='paraformer'?'OpenAI 쪽 설정 (백업용)':'호출 방식'}</div>
     <Radio id="edge" label="Supabase Edge Function 경유 (권장)" sub={cloud?'OpenAI 키를 Supabase Secrets에만 보관합니다':'Supabase 연결 후 사용 가능'} disabled={!cloud}/>
@@ -38377,7 +38341,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v3.5.3';
+const APP_VERSION='v3.6';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
