@@ -36063,6 +36063,22 @@ create policy "pms own files update" on storage.objects for update
 create policy "pms own files delete" on storage.objects for delete
   using (bucket_id='pms-files' and (storage.foldername(name))[1] = auth.uid()::text);`;
 
+/* 저장소 오류를 사람 말로. 원문도 뒤에 붙여 둔다(진단에 필요) */
+function explainStorageError(e){
+  const m=(e&&(e.message||e.error||String(e)))||'';const st=(e&&(e.statusCode||e.status))||'';
+  const tail=' [원문: '+(st?st+' ':'')+m+']';
+  if(/Bucket not found/i.test(m))return '저장소 버킷 pms-files 가 없습니다 — 설정 › 저장/계정의 「첨부 파일」 SQL을 실행하세요'+tail;
+  if(/Invalid API key|Invalid JWT|invalid claim|JWSError|Invalid Compact JWS/i.test(m))
+    return '저장소가 인증을 거부했습니다 — ① 로그아웃 후 다시 로그인 ② 그래도 같으면 Supabase 대시보드 › Storage에서 버킷 pms-files 가 보이는지 확인 ③ 설정의 Supabase 키가 Publishable(또는 anon) 키가 맞는지 확인'+tail;
+  if(/row-level security|policy|Unauthorized|403/i.test(m+st))
+    return '저장소 권한이 없습니다 — 「첨부 파일」 SQL의 create policy 네 줄이 모두 실행됐는지 확인하세요'+tail;
+  if(/already exists|Duplicate/i.test(m))return '같은 이름의 파일이 이미 있습니다'+tail;
+  if(/exceeded|too large|413/i.test(m+st))return '파일이 저장소 한도를 넘습니다'+tail;
+  if(/Failed to fetch|NetworkError/i.test(m))return '저장소에 접속하지 못했습니다 — 네트워크 또는 사내망 차단'+tail;
+  return m+tail;
+}
+/* 첨부 저장소 단계별 점검 — 어디서 막히는지 눈으로 보기 위한 것 */
+Object.assign(window,{explainStorageError});
 /* 이 브라우저 안의 파일 보관함(로컬 모드) */
 function idbOpen(){return new Promise((ok,err)=>{const r=indexedDB.open('pms-files',1);
   r.onupgradeneeded=()=>{if(!r.result.objectStoreNames.contains('f'))r.result.createObjectStore('f');};
@@ -36098,9 +36114,7 @@ const Files={
     const path=Store.user.id+'/'+uid()+'-'+fileSafe(file.name);
     if(this.cloud){
       const {error}=await Store.sb.storage.from(BUCKET).upload(path,small,{contentType:small.type||'application/octet-stream',upsert:false});
-      if(error)throw new Error(/Bucket not found/i.test(error.message)
-        ? '저장소 버킷이 없습니다 — 설정 › 저장/계정의 「첨부 파일」 SQL을 한 번 실행하세요'
-        : (/row-level security|policy/i.test(error.message)?'저장소 권한이 없습니다 — 「첨부 파일」 SQL의 policy 부분이 실행됐는지 확인하세요':error.message));
+      if(error)throw new Error(explainStorageError(error));
     } else await idbPut(path,small);
     return {path,name:file.name,type:small.type,size:small.size};
   },
@@ -36130,10 +36144,43 @@ const Files={
     if(this.cloud){const {error}=await Store.sb.storage.from(BUCKET).remove([path]);if(error)throw new Error(error.message);}
     else await idbDel(path);
   },
+  /* 단계별 점검: 로그인 → 버킷 → 올리기 → 주소 → 내려받기 → 지우기 */
+  async diag(){
+    const out=[];const add=(step,ok,msg)=>{out.push({step,ok,msg:msg||''});return ok;};
+    if(!this.cloud){add('저장 모드',true,'로컬 모드 — 첨부는 이 브라우저(IndexedDB)에만 저장됩니다');
+      try{const k='diag/'+uid();await idbPut(k,new Blob(['x']));await idbGet(k);await idbDel(k);add('브라우저 보관함',true,'읽고 쓰기 정상');}
+      catch(e){add('브라우저 보관함',false,e.message);}
+      return out;}
+    add('저장 모드',true,'클라우드(Supabase) · '+(Store.cfg.supabaseUrl||''));
+    try{const {data,error}=await Store.sb.auth.getSession();
+      const s=data&&data.session;
+      add('로그인 세션',!!s,s?('사용자 '+(s.user&&s.user.email)+' · 토큰 만료 '+new Date(s.expires_at*1000).toLocaleString('ko-KR')):(error?error.message:'세션 없음 — 다시 로그인하세요'));
+    }catch(e){add('로그인 세션',false,e.message);}
+    let bucketOk=false;
+    try{const {error}=await Store.sb.storage.from(BUCKET).list(Store.user.id,{limit:1});
+      bucketOk=add('버킷 pms-files',!error,error?explainStorageError(error):'접근 가능');
+    }catch(e){add('버킷 pms-files',false,e.message);}
+    if(!bucketOk)return out;
+    const path=Store.user.id+'/diag-'+uid()+'.txt';
+    let upOk=false;
+    try{const {error}=await Store.sb.storage.from(BUCKET).upload(path,new Blob(['진단'],{type:'text/plain'}),{contentType:'text/plain'});
+      upOk=add('올리기',!error,error?explainStorageError(error):path);
+    }catch(e){add('올리기',false,e.message);}
+    if(upOk){
+      try{const {data,error}=await Store.sb.storage.from(BUCKET).createSignedUrl(path,60);
+        if(error)add('보기 주소',false,explainStorageError(error));
+        else{add('보기 주소',true,'1분짜리 서명 주소 발급됨');
+          const r=await fetch(data.signedUrl);add('내려받기',r.ok,r.ok?'정상':('HTTP '+r.status));}
+      }catch(e){add('보기 주소',false,e.message);}
+      try{const {error}=await Store.sb.storage.from(BUCKET).remove([path]);add('지우기',!error,error?explainStorageError(error):'정리 완료');}
+      catch(e){add('지우기',false,e.message);}
+    }
+    return out;
+  },
   async check(){
     if(!this.cloud)return {ok:true,msg:'로컬 모드 — 첨부는 이 브라우저에만 저장됩니다(다른 기기에서는 안 보임)'};
     const {error}=await Store.sb.storage.from(BUCKET).list(Store.user.id,{limit:1});
-    if(error)return {ok:false,msg:/Bucket not found/i.test(error.message)?'버킷 pms-files 가 없습니다 — 아래 SQL을 실행하세요':explainSbError(error)};
+    if(error)return {ok:false,msg:explainStorageError(error)};
     return {ok:true,msg:'첨부 파일 저장소가 준비되어 있습니다'};
   },
 };
@@ -36386,7 +36433,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.9'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.9.1'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36450,15 +36497,29 @@ function TrashModal({open,onClose,onRestore,onToast}){
 /* 첨부 파일 저장소(Supabase Storage) 준비 상태 */
 function FilesSection({onToast}){
   const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
-  const [r,setR]=React.useState(null);const [busy,setBusy]=React.useState(false);
+  const [r,setR]=React.useState(null);const [busy,setBusy]=React.useState(false);const [diag,setDiag]=React.useState(null);
   const check=async()=>{setBusy(true);try{setR(await Files.check());}catch(e){setR({ok:false,msg:e.message});}setBusy(false);};
+  const runDiag=async()=>{setBusy('diag');setDiag(null);
+    try{setDiag(await Files.diag());}catch(e){setDiag([{step:'점검 실패',ok:false,msg:e.message}]);}
+    setBusy(false);check();};
   React.useEffect(()=>{check();},[]);
   return <div style={{marginTop:16,paddingTop:12,borderTop:'1px solid var(--border-default)'}}>
     <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
       <span style={{font:'var(--type-card-title)'}}>첨부 파일</span>
       {r&&<Badge tone={r.ok?'linked':'muted'}>{r.ok?'준비됨':'설정 필요'}</Badge>}
-      <span style={{marginLeft:'auto'}}><Button variant="ghost" size="xs" disabled={busy} onClick={check}>{busy?'확인 중…':'다시 확인'}</Button></span>
+      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <Button variant="classic" size="xs" disabled={busy} onClick={runDiag}>{busy==='diag'?'점검 중…':'🩺 진단'}</Button>
+        <Button variant="ghost" size="xs" disabled={busy} onClick={check}>{busy===true?'확인 중…':'다시 확인'}</Button></span>
     </div>
+    {diag&&<div style={{border:'1px solid var(--border-strong)',borderRadius:4,marginBottom:8,fontSize:'var(--fs-sm)'}}>
+      {diag.map((d,i)=><div key={i} style={{display:'flex',gap:8,padding:'5px 10px',borderBottom:i<diag.length-1?'1px solid var(--border-default)':'none',alignItems:'flex-start'}}>
+        <span style={{color:d.ok?'var(--color-success)':'var(--color-danger)',fontWeight:700}}>{d.ok?'✓':'✗'}</span>
+        <b style={{minWidth:96}}>{d.step}</b>
+        <span style={{color:'var(--text-muted)',wordBreak:'break-all'}}>{d.msg}</span></div>)}
+      <div style={{padding:'6px 10px',background:'var(--surface-hover)'}}>
+        <Button variant="ghost" size="xs" onClick={()=>{navigator.clipboard.writeText(diag.map(d=>(d.ok?'OK  ':'FAIL ')+d.step+' — '+d.msg).join('\n'));onToast&&onToast('진단 결과 복사됨');}}>📋 결과 복사</Button>
+      </div>
+    </div>}
     <InfoBar>노트에 이미지·PDF를 붙여넣거나 끌어놓으려면 저장소가 필요합니다. 아래 SQL을 한 번 실행하면 비공개 버킷 <code>pms-files</code>가 만들어지고, <b>내 폴더만</b> 읽고 쓸 수 있게 잠깁니다. 무료 한도는 1GB입니다.</InfoBar>
     {r&&<div style={{fontSize:'var(--fs-sm)',color:r.ok?'var(--color-success)':'var(--text-muted)',margin:'6px 0'}}>{r.ok?'✓ ':'· '}{r.msg}</div>}
     <pre style={{font:'11px/1.45 var(--font-mono)',background:'var(--surface-hover)',border:'1px solid var(--border-default)',padding:'8px 10px',borderRadius:4,maxHeight:170,overflow:'auto',margin:0,whiteSpace:'pre-wrap'}}>{FILES_SQL}</pre>
@@ -38074,7 +38135,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v2.9';
+const APP_VERSION='v2.9.1';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
