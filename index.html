@@ -36469,7 +36469,17 @@ const Gmail={
   stripHtml(h){return h.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi,'').replace(/<br\s*\/?>|<\/p>|<\/div>|<\/tr>/gi,'\n').replace(/<[^>]+>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/\n{3,}/g,'\n\n').trim();},
   bodyOf(payload){let plain='',html='';const walk=p=>{if(!p)return;if(p.parts)p.parts.forEach(walk);const d=p.body&&p.body.data;if(!d)return;if(p.mimeType==='text/plain'&&!plain)plain=this.b64urlBytes(d);else if(p.mimeType==='text/html'&&!html)html=this.b64urlBytes(d);};walk(payload);return plain||this.stripHtml(html)||'';},
   toMail(msg,acc){const H={};(msg.payload.headers||[]).forEach(h=>H[h.name.toLowerCase()]=h.value);const labels=msg.labelIds||[];const d=new Date(H.date||Number(msg.internalDate));
-    return {id:'g:'+msg.id,gid:msg.id,acc,folder:labels.includes('SENT')?'sent':labels.includes('DRAFT')?'draft':'inbox',from:H.from||'',to:H.to||'',cc:H.cc||'',subject:H.subject||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:this.bodyOf(msg.payload).slice(0,20000),star:labels.includes('STARRED'),read:!labels.includes('UNREAD'),tags:[],attachments:(function(){const a=[];const w=p=>{if(!p)return;if(p.filename&&p.body&&p.body.attachmentId)a.push(p.filename);(p.parts||[]).forEach(w);};w(msg.payload);return a;})()};},
+    return {id:'g:'+msg.id,gid:msg.id,acc,folder:labels.includes('SENT')?'sent':labels.includes('DRAFT')?'draft':'inbox',from:H.from||'',to:H.to||'',cc:H.cc||'',subject:H.subject||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:this.bodyOf(msg.payload).slice(0,20000),star:labels.includes('STARRED'),read:!labels.includes('UNREAD'),tags:[],attachments:(function(){const a=[];const w=p=>{if(!p)return;
+      if(p.filename&&p.body&&p.body.attachmentId)a.push({name:p.filename,mime:p.mimeType||'',size:p.body.size||0,gid:msg.id,aid:p.body.attachmentId});
+      (p.parts||[]).forEach(w);};w(msg.payload);return a;})()};},
+
+  /* 첨부 내려받기 — 목록에는 이름만 담고, 열 때 실제 바이트를 가져온다 */
+  async attachment(gid,aid){
+    const j=await this.api('messages/'+gid+'/attachments/'+aid);
+    if(!j.data)throw new Error('첨부를 가져오지 못했습니다');
+    const bin=atob(String(j.data).replace(/-/g,'+').replace(/_/g,'/'));
+    return Uint8Array.from(bin,c=>c.charCodeAt(0));
+  },
 
   /* 받은편지함 + 보낸편지함 가져오기. 이미 있는 메일(gid)은 건너뛰고 읽음/별표만 갱신 */
   async sync(acc,existing,onProgress){
@@ -36510,7 +36520,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.6'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.7'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36622,28 +36632,29 @@ function SttTab({c,setC}){
     <input type="radio" name="sttEngine" checked={engine===id} onChange={()=>setC({...c,sttEngine:id})} style={{marginTop:3}}/>
     <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span><div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{sub}</div></span></label>;
   return <>
-    <InfoBar>노트에서 <b>● 녹음</b>으로 회의를 녹음하거나 음성 파일을 첨부한 뒤 <b>🎧 전사</b>를 누르면 글로 옮깁니다. OpenAI Whisper를 씁니다 — 1시간 녹음에 약 400원, <b>녹음이 OpenAI 서버로 올라갑니다</b>(회사 자료라면 이 점을 감안하세요).</InfoBar>
-    <InfoBar>준비: ① platform.openai.com에서 API 키 발급 · 결제 수단 등록 ② Supabase 대시보드 › Edge Functions에 <code>transcribe</code> 함수 배포(소스 묶음의 supabase/functions/transcribe/index.ts) ③ Edge Functions › Secrets에 <code>OPENAI_API_KEY</code> 추가 — 가이드 11</InfoBar>
+    <InfoBar>노트에서 <b>● 녹음</b>으로 회의를 녹음하거나 음성 파일을 첨부한 뒤 <b>🎧 전사</b>를 누르면 글로 옮기고, 이어서 <b>정리·번역</b>까지 자동으로 돌립니다. <b>녹음은 아래에서 고른 엔진의 서버로 올라갑니다</b>(회사 자료라면 이 점을 감안하세요).</InfoBar>
     <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>전사 엔진</div>
-    <Eng id="openai" label="OpenAI (gpt-transcribe)" sub="한국어·영어에 무난합니다. 앱이 파일을 잘라 올립니다"/>
+    <Eng id="openai" label="OpenAI (gpt-transcribe)" sub="한국어·영어에 무난합니다. 1시간에 약 400원. 앱이 파일을 잘라 올립니다"/>
+    {engine==='openai'&&<div style={{margin:'-2px 0 8px 22px'}}>
+      <InfoBar>준비: ① platform.openai.com에서 API 키 발급 · 결제 수단 등록 ② Supabase 대시보드 › Edge Functions에 <code>transcribe</code> 함수 배포(소스 묶음의 supabase/functions/transcribe/index.ts) ③ Edge Functions › Secrets에 <code>OPENAI_API_KEY</code> 추가 — 가이드 11</InfoBar>
+      <div style={{font:'var(--type-card-title)',margin:'8px 0 6px'}}>호출 방식</div>
+      <Radio id="edge" label="Supabase Edge Function 경유 (권장)" sub={cloud?'OpenAI 키를 Supabase Secrets에만 보관합니다':'Supabase 연결 후 사용 가능'} disabled={!cloud}/>
+      <Radio id="direct" label="브라우저에서 직접 호출" sub="이 브라우저에 OpenAI 키를 저장합니다 — 개인 PC에서만 권장"/>
+      {via==='direct'&&<Field label="OpenAI API 키"><TextInput type="password" value={c.openaiKey||''} onChange={e=>setC({...c,openaiKey:e.target.value})} placeholder="sk-..."/></Field>}
+      <Field label="전사 모델"><Select options={STT_MODELS} value={c.sttModel||'gpt-transcribe'} onChange={v=>setC({...c,sttModel:v})} style={{width:'100%'}}/></Field>
+    </div>}
     <Eng id="paraformer" label="Alibaba Qwen3-ASR · 중국어 특화" sub="중국어 정확도가 가장 좋습니다. 앱이 조각으로 잘라 보냅니다(길이 제한 없음). Supabase 연결 필요"/>
-    {engine==='paraformer'&&<>
+    {engine==='paraformer'&&<div style={{margin:'-2px 0 8px 22px'}}>
       <InfoBar>준비: ① <b>modelstudio.console.alibabacloud.com/ap-southeast-1</b>(싱가포르) › API Key › Create ② Edge Function <code>paraformer</code> 배포 ③ Supabase Secrets에 <code>DASHSCOPE_API_KEY</code> 추가. 모델은 <b>qwen3-asr-flash</b>를 씁니다 — 음성 조각을 직접 보내므로 공개 주소나 별도 버킷이 필요 없습니다.</InfoBar>
       <Field label="서비스 주소 (비워두면 싱가포르 기본값)"><TextInput value={c.dashBase||''} onChange={e=>setC({...c,dashBase:e.target.value.trim()})} placeholder="https://dashscope-intl.aliyuncs.com"/></Field>
-    </>}
-    <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>{engine==='paraformer'?'OpenAI 쪽 설정 (백업용)':'호출 방식'}</div>
-    <Radio id="edge" label="Supabase Edge Function 경유 (권장)" sub={cloud?'OpenAI 키를 Supabase Secrets에만 보관합니다':'Supabase 연결 후 사용 가능'} disabled={!cloud}/>
-    <Radio id="direct" label="브라우저에서 직접 호출" sub="이 브라우저에 OpenAI 키를 저장합니다 — 개인 PC에서만 권장"/>
-    {via==='direct'&&<Field label="OpenAI API 키"><TextInput type="password" value={c.openaiKey||''} onChange={e=>setC({...c,openaiKey:e.target.value})} placeholder="sk-..."/></Field>}
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-      <Field label="전사 모델"><Select options={STT_MODELS} value={c.sttModel||'gpt-transcribe'} onChange={v=>setC({...c,sttModel:v})} style={{width:'100%'}}/></Field>
-      <Field label="말하는 언어"><Select options={[{id:'ko',label:'한국어'},{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지 (섞여 있을 때)'}]} value={c.sttLang||'ko'} onChange={v=>setC({...c,sttLang:v})} style={{width:'100%'}}/></Field>
-    </div>
+    </div>}
+    <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>공통 (두 엔진 모두 적용)</div>
+    <Field label="말하는 언어"><Select options={[{id:'ko',label:'한국어'},{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지 (섞여 있을 때)'}]} value={c.sttLang||'ko'} onChange={v=>setC({...c,sttLang:v})} style={{width:'100%'}}/></Field>
     <Field label="용어 힌트 (사람 이름 · 제품명 · 사내 용어를 쉼표로)">
       <TextInput value={c.sttHint||''} onChange={e=>setC({...c,sttHint:e.target.value})} placeholder="예: 온산, MOPJ, 에틸렌, 张伟, 华东공장"/>
     </Field>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',margin:'-4px 0 8px'}}>
-      전사할 때 이 낱말들을 미리 알려줍니다. <b>고유명사가 자꾸 틀리게 적히는 문제</b>에 가장 효과가 큽니다(gpt-transcribe 계열에서 반영).
+      전사할 때 이 낱말들을 미리 알려줍니다. <b>고유명사가 자꾸 틀리게 적히는 문제</b>에 가장 효과가 큽니다. Alibaba 엔진에서도 그대로 쓰이고(첫 조각의 안내 문장으로 전달), 전사 뒤 <b>정리·번역</b>의 낱말 교정에도 함께 쓰입니다.
     </div>
     <div style={{display:'flex',alignItems:'center',gap:8,marginTop:4}}>
       <Button variant="classic" size="sm" icon="🎧" disabled={busy} onClick={run}>{busy?'확인 중…':'전사 테스트'}</Button>
@@ -36687,6 +36698,13 @@ function SettingsModal({open,onClose,onToast}){
         <input type="checkbox" checked={c.mailFilter!==false} onChange={e=>setC({...c,mailFilter:e.target.checked})} style={{marginTop:3}}/>
         <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>광고 · 소셜 · 알림 메일 제외</span>
         <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>Gmail이 프로모션 · 소셜 · 알림 · 포럼으로 분류한 메일과 스팸을 동기화에서 빼고 기본 메일함만 가져옵니다</div></span></label>
+      <Field label="자동 동기화 주기">
+        <Select style={{width:'100%'}} value={String(c.mailAuto||0)} onChange={v=>setC({...c,mailAuto:+v})}
+          options={[{id:'0',label:'끄기 — 🔄 단추를 눌렀을 때만'},{id:'1',label:'1분마다'},{id:'5',label:'5분마다 (권장)'},{id:'15',label:'15분마다'},{id:'30',label:'30분마다'},{id:'60',label:'1시간마다'}]}/>
+      </Field>
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',margin:'-4px 0 8px'}}>
+        Gmail이 <b>연결된 상태</b>에서, 이 앱 탭이 열려 있는 동안만 돕니다. 새 메일이 있을 때만 알림이 뜹니다. Gmail API 무료 한도는 넉넉하지만 배터리를 아끼려면 5분 이상을 권합니다.
+      </div>
     </>}
     {tab==='ai'&&<ClaudeTab c={c} setC={setC}/>}
     {tab==='stt'&&<SttTab c={c} setC={setC}/>}
@@ -36747,7 +36765,14 @@ function mimeBody(raw,ct,cte,out){const type=(ct||'text/plain').split(';')[0].tr
   if(type.startsWith('multipart/')){const b=param(ct,'boundary');if(!b)return;const parts=('\n'+raw).split(new RegExp('\\r?\\n--'+b.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:--)?(?=\\r?\\n|$)'));
     parts.slice(1).forEach(pt=>{const i=pt.search(/\r?\n\r?\n/);if(i<0)return;const H=parseMimeHeaders(pt.slice(0,i));mimeBody(pt.slice(i).replace(/^\r?\n\r?\n/,''),H['content-type'],H['content-transfer-encoding'],out,H['content-disposition']);});return;}
   const disp=arguments[4]||'';const fn=decodeWords(param(disp,'filename')||param(ct,'name'));
-  if(/attachment/i.test(disp)||(fn&&!type.startsWith('text/'))){if(fn)out.attachments.push(fn);return;}
+  if(/attachment/i.test(disp)||(fn&&!type.startsWith('text/'))){
+    if(!fn)return;
+    /* 파일 내용까지 담아 둔다 — 나중에 저장소에 올려 클릭으로 열 수 있게 */
+    const e=(cte||'').toLowerCase();
+    let bytes=null;
+    try{bytes=/base64/.test(e)?b64Bytes(raw):/quoted-printable/.test(e)?qpBytes(raw):latin1Bytes(raw);}catch(_){}
+    out.attachments.push({name:fn,mime:type,size:bytes?bytes.length:0,bytes});
+    return;}
   if(!type.startsWith('text/'))return;
   const enc=(cte||'').toLowerCase();const bytes=/base64/.test(enc)?b64Bytes(raw):/quoted-printable/.test(enc)?qpBytes(raw):latin1Bytes(raw);
   const txt=decodeBytes(bytes,param(ct,'charset')||'utf-8');
@@ -36817,7 +36842,75 @@ function parseMsg(buf){if(!window.MsgReader)throw new Error('.msg 파서가 로�
   if(!body&&d.body)body=d.body.trim(),src='lib';
   if(!body){body='(본문 없음 — 이 .msg 파일에는 본문이 포함되지 않았습니다. 회사 웹메일에서 .eml로 내려받아 다시 드롭하세요)';console.info('msg props',tags.join(' '),'cp',cp,'src',src);}
   const dt=new Date(d.messageDeliveryTime||d.clientSubmitTime||d.lastModificationTime||'');
-  return {from,to,cc,subject:d.subject||d.normalizedSubject||'(제목 없음)',date:isNaN(dt)?nowStamp():dt.toISOString(),body:body.replace(/\r\n/g,'\n').trim(),attachments:(d.attachments||[]).filter(a=>!a.attachmentHidden).map(a=>a.fileName||a.fileNameShort).filter(Boolean)};}
+  return {from,to,cc,subject:d.subject||d.normalizedSubject||'(제목 없음)',date:isNaN(dt)?nowStamp():dt.toISOString(),body:body.replace(/\r\n/g,'\n').trim(),attachments:msgAttachments(buf,d)};}
+/* .msg 첨부 — 이름과 내용을 함께 꺼낸다 */
+function msgAttachments(buf,d){
+  const list=(d.attachments||[]).map((a,i)=>({a,i})).filter(o=>!o.a.attachmentHidden&&(o.a.fileName||o.a.fileNameShort));
+  if(!list.length)return [];
+  let reader=null;try{reader=new MsgReader(buf);reader.getFileData();}catch(_){}
+  return list.map(({a,i})=>{
+    const name=a.fileName||a.fileNameShort;let bytes=null;
+    try{const c=reader&&reader.getAttachment(i);if(c&&c.content)bytes=c.content;}catch(_){}
+    return {name,mime:a.attachMimeTag||'',size:bytes?bytes.length:(a.attachmentSize||0),bytes};});}
+/* ---------- 첨부 ---------- */
+/* 옛 형식(문자열)과 새 형식(객체)을 모두 받아 하나로 */
+const attNorm=a=>typeof a==='string'?{name:a}:(a||{});
+const attSize=n=>!n?'':n>=1048576?(n/1048576).toFixed(1)+'MB':n>=1024?Math.round(n/1024)+'KB':n+'B';
+const attIcon=n=>/\.(png|jpe?g|gif|webp|bmp|heic)$/i.test(n)?'🖼':/\.pdf$/i.test(n)?'📕':/\.(xlsx?|csv)$/i.test(n)?'📊':/\.(pptx?)$/i.test(n)?'📽':/\.(docx?|hwp)$/i.test(n)?'📄':/\.(zip|7z|rar)$/i.test(n)?'🗜':/\.(mp3|m4a|wav|aac|webm)$/i.test(n)?'🎙':'📎';
+/* 가져온 메일의 첨부 내용을 저장소에 올려 둔다(실패해도 이름은 남긴다) */
+async function stashAttachments(items,onStep){
+  let n=0,total=items.reduce((s,it)=>s+((it.attachments||[]).filter(a=>a&&a.bytes&&a.bytes.length).length),0);
+  for(const it of items){
+    const at=it.attachments||[];if(!at.length)continue;
+    const out=[];
+    for(const a0 of at){
+      const a=attNorm(a0);
+      if(!a.bytes||!a.bytes.length){out.push({name:a.name,mime:a.mime,size:a.size});continue;}
+      onStep&&onStep('첨부 보관 중 '+(++n)+'/'+total+' · '+a.name);
+      try{const f=new File([a.bytes],a.name||'attachment',{type:a.mime||'application/octet-stream'});
+        const r=await Files.put(f);
+        out.push({name:a.name,mime:r.type||a.mime,size:r.size,path:r.path});}
+      catch(e){out.push({name:a.name,mime:a.mime,size:a.size,err:e.message});}
+    }
+    it.attachments=out;
+  }
+  return items;
+}
+/* 첨부 칩 — 누르면 새 탭에서 연다 */
+function AttachBar({mail,toast}){
+  const list=(mail.attachments||[]).map(attNorm).filter(a=>a.name);
+  const [busy,setBusy]=React.useState('');
+  if(!list.length)return null;
+  const open=async(a)=>{
+    if(busy)return;
+    try{
+      setBusy(a.name);
+      if(a.path){window.open(await Files.url(a.path),'_blank','noreferrer');return;}
+      if(a.aid&&a.gid){
+        const bytes=await Gmail.attachment(a.gid,a.aid);
+        const u=URL.createObjectURL(new Blob([bytes],{type:a.mime||'application/octet-stream'}));
+        const el=document.createElement('a');el.href=u;el.download=a.name;el.rel='noreferrer';
+        /* 브라우저가 열 수 있는 형식은 새 탭으로, 나머지는 내려받기 */
+        if(/^(image|audio|video|text)\//.test(a.mime||'')||/pdf$/.test(a.mime||''))window.open(u,'_blank','noreferrer');
+        else el.click();
+        setTimeout(()=>URL.revokeObjectURL(u),60000);return;
+      }
+      toast('이 첨부는 이름만 있습니다 — 원본 메일에서 열어주세요'+(a.err?' ('+a.err+')':''));
+    }catch(e){toast('⚠ 첨부를 열지 못했습니다 — '+(e.message||e));}
+    finally{setBusy('');}
+  };
+  const usable=a=>!!(a.path||(a.aid&&a.gid));
+  return <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10,alignItems:'center'}}>
+    <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>📎 첨부 {list.length}</span>
+    {list.map((a,i)=><button key={i} type="button" onClick={()=>open(a)} title={usable(a)?'클릭하면 새 탭에서 엽니다':'이름만 있는 첨부 — 원본 메일에서 열기'}
+      style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 8px',borderRadius:12,cursor:usable(a)?'pointer':'not-allowed',
+        border:'1px solid '+(usable(a)?'var(--border-strong)':'var(--border-default)'),background:usable(a)?'#fff':'var(--surface-hover)',
+        color:usable(a)?'var(--text-body)':'var(--text-label)',fontSize:'var(--fs-sm)',fontFamily:'inherit',opacity:busy&&busy!==a.name?.6:1}}>
+      <span aria-hidden="true">{attIcon(a.name)}</span>{busy===a.name?'여는 중…':a.name}
+      {a.size?<span style={{color:'var(--text-label)',fontFamily:'var(--font-num)'}}>{attSize(a.size)}</span>:null}
+    </button>)}
+  </div>;
+}
 function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const {Card,Button,Badge,InfoBar,Modal,DropZone}=window.HDWorkbookDesignSystem_ad60e4;
   const [q,setQ]=React.useState('');
@@ -36852,6 +36945,30 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
         toast(added.length?`✓ ${added.length}건 새로 가져옴 · ${skipped}건은 이미 있음`:'새 메일 없음');}}
     catch(e){toast('⚠ 동기화 실패: '+explainGmailError(e));}
     setBusy('');};
+  /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다 */
+  const quietSync=async()=>{
+    const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');
+    if(!targets.length||!Gmail.connected)return;
+    let added=[];
+    for(const a of targets){
+      try{const r=await Gmail.sync(a.id,db.mails,null);if(r.added.length)added=added.concat(r.added);}
+      catch(e){console.warn('[PMS 자동 동기화]',explainGmailError(e));return;}
+    }
+    if(added.length){setDb('mails',[...added,...db.mails.filter(m=>!added.some(x=>x.id===m.id))]);
+      toast('📬 새 메일 '+added.length+'건');}
+  };
+  const qs=React.useRef(quietSync);qs.current=quietSync;
+  const auto=+(Store.cfg.mailAuto||0);
+  React.useEffect(()=>{
+    if(!auto)return;
+    let live=true,running=false;
+    const tick=async()=>{if(!live||running||document.hidden)return;running=true;try{await qs.current();}finally{running=false;}};
+    const t=setInterval(tick,auto*60000);
+    const onShow=()=>{if(!document.hidden)tick();};
+    document.addEventListener('visibilitychange',onShow);
+    const first=setTimeout(tick,8000);   /* 화면을 연 직후 한 번 */
+    return()=>{live=false;clearInterval(t);clearTimeout(first);document.removeEventListener('visibilitychange',onShow);};
+  },[auto]);
   const importMails=(items,acc)=>{const key=m=>(m.subject||'')+'|'+(m.date||'').slice(0,16)+'|'+(m.from||'');const have=new Map(db.mails.map(m=>[key(m),m]));
     const fresh=[],refill=[];items.forEach(p=>{const ex=have.get(key(p));if(!ex)fresh.push(p);else if((!ex.body||/^\(본문 없음/.test(ex.body))&&p.body&&p.body!==ex.body)refill.push([ex.id,p]);});
     const ms=fresh.map(p=>({id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p}));
@@ -36861,7 +36978,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button></>}
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
       toolbarRight={<><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·보낸 사람·본문" style={{width:220,padding:'4px 8px'}}/><Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
       {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)',flexWrap:'wrap'}}>
         <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>건 선택
@@ -36896,7 +37013,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
               <span style={{color:'var(--text-label)'}}>받는 사람</span><span>{cur.to}</span>
               <span style={{color:'var(--text-label)'}}>날짜</span><span>{fmtDT(cur.date)} · <Badge tone="blue" style={{fontSize:10}}>{accOf(cur.acc).label}</Badge></span>
             </div>
-            {cur.attachments&&cur.attachments.length>0&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:10}}>📎 첨부 {cur.attachments.length}: {cur.attachments.join(' · ')} <span style={{color:'var(--text-label)'}}>(파일은 원본 메일에서 열기)</span></div>}
+            <AttachBar mail={cur} toast={toast}/>
             <div style={{whiteSpace:'pre-wrap',fontSize:'var(--fs-md2)',lineHeight:1.65,color:'var(--text-body)'}}>{cur.body}</div>
           </>}
         </div>
@@ -36942,17 +37059,20 @@ function ComposeModal({draft,accounts,onClose,onSend}){
 function ImportModal({open,accounts,onClose,onImport}){
   const {Button,Modal,DropZone,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;const [acc,setAcc]=React.useState('work');const [paste,setPaste]=React.useState('');
   const [err,setErr]=React.useState('');
+  const [step,setStep]=React.useState('');
   const files=async fs=>{const items=[];const bad=[];for(const f of fs){try{if(/\.msg$/i.test(f.name))items.push(parseMsg(await f.arrayBuffer()));else items.push(parseEml(await f.text()));}catch(e){bad.push(f.name+': '+e.message);}}
-    setErr(bad.join(' · '));if(items.length)onImport(items,acc);};
+    setErr(bad.join(' · '));
+    if(items.length){setStep('첨부 파일 보관 중…');await stashAttachments(items,s=>setStep(s));setStep('');onImport(items,acc);}};
   return <Modal open={open} onClose={onClose} title="메일 가져오기" width={560} footer={<><Button variant="gray" onClick={onClose}>닫기</Button><Button variant="accent" icon="📥" disabled={!paste.trim()} onClick={()=>onImport([parseEml(paste)],acc)}>붙여넣기 가져오기</Button></>}>
     <Field label="가져올 계정" row><Select value={acc} onChange={setAcc} options={accounts.map(a=>({id:a.id,label:a.label}))}/></Field>
     <DropZone title="📎 .msg / .eml 파일을 여기에 놓으세요 (여러 개 가능)" sub="Outlook: 메일을 선택해 바탕화면·폴더로 드래그하면 .msg 파일이 생김 → 그 파일들을 여기에 드롭 · Gmail: ⋮ › 메시지 다운로드(.eml)" accept=".msg,.eml,.txt" onFiles={files}/>
+    {step&&<InfoBar>{step}</InfoBar>}
     {err&&<InfoBar tone="warn">읽지 못한 파일: {err}</InfoBar>}
     <InfoBar>외부에서는 OWA 메일을 열어 헤더(보낸 사람/받는 사람/제목/날짜)와 본문을 그대로 복사해 아래에 붙여넣으세요.</InfoBar>
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12px/1.5 var(--font-mono)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,FOLDERS});
+Object.assign(window,{MailView,mailNav,FOLDERS,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -37858,21 +37978,23 @@ function KnowledgeView({db,setDb,st,set,toast}){
     upd(a.id,{md:removeWikiLink(a.md,b.title)});toast('연결 해제 · '+a.title+' → '+b.title);};
   const ai=async kind=>{if(!cur)return;set({aiBusy:true});
     const [main,raw]=splitRaw(cur.md);const src=main; /* 이미 정돈된 노트면 원문 섹션은 건드리지 않고 본문만 다시 정돈 */
-    if(kind==='polish'){ /* 받아쓴 글을 사람이 읽을 수 있게 — 교정 + 한국어 번역 + 요점 */
+    /* 받아쓴 글을 사람이 읽을 수 있게 — 교정 + 한국어 번역 + 요점. 주어진 본문을 정리해 새 본문을 돌려준다 */
+    const polishMd=async(mdIn)=>{
+      /* 「## 녹취」가 있으면 그 부분만, 없으면 노트 본문 전체(첨부 줄은 빼고) */
+      const m=/##\s*녹취[^\n]*\n([\s\S]*?)(?=\n##\s|$)/.exec(mdIn);
+      const raw=(m?m[1]:splitRaw(mdIn)[0].replace(/^#\s+.*$/m,''))
+        .replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
+      if(raw.length<20)throw new Error('정리할 글이 없습니다 — 먼저 🎧 전사를 하거나 본문에 글을 넣으세요');
+      const n=Math.ceil(raw.length/POLISH_CHUNK);
+      toast('글 '+raw.length.toLocaleString()+'자를 '+n+'조각으로 나눠 정리합니다 · 몇 분 걸립니다');
+      const out=await polishTranscript(raw,{hint:Store.cfg.sttHint,onStep:t=>toast(t)});
+      /* 빈 껍데기 절과 지난번 결과는 걷어내고 새로 붙인다 */
+      const md=mdIn.replace(/\n*##\s*(녹취 정리|정리·번역)[^\n]*\n[\s\S]*?(?=\n##\s|$)/g,'').replace(/\s+$/,'');
+      return md+'\n\n## 정리·번역 (Claude)\n'+out.trim()+'\n';
+    };
+    if(kind==='polish'){
       try{
-        /* 「## 녹취」가 있으면 그 부분만, 없으면 노트 본문 전체(첨부 줄은 빼고) */
-        const m=/##\s*녹취[^\n]*\n([\s\S]*?)(?=\n##\s|$)/.exec(cur.md);
-        const raw=(m?m[1]:splitRaw(cur.md)[0].replace(/^#\s+.*$/m,''))
-          .replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
-        if(raw.length<20)throw new Error('정리할 글이 없습니다 — 먼저 🎧 전사를 하거나 본문에 글을 넣으세요');
-        const n=Math.ceil(raw.length/POLISH_CHUNK);
-        toast('글 '+raw.length.toLocaleString()+'자를 '+n+'조각으로 나눠 정리합니다 · 몇 분 걸립니다');
-        const out=await polishTranscript(raw,{hint:Store.cfg.sttHint,onStep:t=>toast(t)});
-        /* 빈 껍데기 절과 지난번 결과는 걷어내고 새로 붙인다 */
-        let md=cur.md
-          .replace(/\n*##\s*(녹취 정리|정리·번역)[^\n]*\n[\s\S]*?(?=\n##\s|$)/g,'')
-          .replace(/\s+$/,'');
-        upd(cur.id,{md:md+'\n\n## 정리·번역 (Claude)\n'+out.trim()+'\n'});
+        upd(cur.id,{md:await polishMd(cur.md)});
         toast('정리 완료 — 위키에 수집하면 물어보기의 근거가 됩니다');
       }catch(e){toast('⚠ '+e.message);}
       set({aiBusy:false});return;
@@ -37888,9 +38010,14 @@ function KnowledgeView({db,setDb,st,set,toast}){
           const txt=await transcribeAttachment(list[i].path,{name:'note',onStep:m=>toast(nm+' · '+m)});
           all+=(all?'\n\n':'')+'### '+nm.replace(/^🎙\s*/,'')+'\n'+txt;
         }
-        const eng=Store.cfg.sttEngine==='paraformer'?'Paraformer':'Whisper';
-        upd(cur.id,{md:cur.md+'\n\n## 녹취 ('+eng+')\n'+all.trim()+'\n'});
-        toast('전사 완료 — 위키 정돈으로 다듬을 수 있습니다');
+        const eng=Store.cfg.sttEngine==='paraformer'?'Qwen3-ASR':'Whisper';
+        const withRaw=cur.md+'\n\n## 녹취 ('+eng+')\n'+all.trim()+'\n';
+        upd(cur.id,{md:withRaw});
+        /* 전사가 끝나면 정리·번역까지 이어서 — 받아쓴 그대로는 읽기 어렵다 */
+        toast('전사 완료 — 이어서 정리·번역합니다');
+        try{upd(cur.id,{md:await polishMd(withRaw)});
+          toast('전사·정리 완료 — 위키에 수집하면 물어보기의 근거가 됩니다');}
+        catch(pe){toast('⚠ 정리·번역 실패 — 녹취는 남아 있습니다. 🈯 단추로 다시 시도하세요 ('+pe.message+')');}
       }catch(e){
         console.error('[PMS 전사 실패]',e.message);
         /* 토스트는 길면 잘리므로 전문을 노트 아래에 남긴다 */
@@ -37949,7 +38076,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
   return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
     toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span></>}
-    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy||!audioRefs(cur&&cur.md).length} onClick={()=>ai('stt')} title="이 노트에 붙은 녹음을 글로 옮깁니다">전사</Button><Button variant="secondary" size="sm" icon="🈯" disabled={!cur||st.aiBusy} onClick={()=>ai('polish')} title="받아쓴 글의 오탈자·고유명사를 바로잡고 문단을 나눕니다. 외국어면 한국어 번역과 요점을 붙입니다">정리·번역</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
+    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy||!audioRefs(cur&&cur.md).length} onClick={()=>ai('stt')} title="이 노트에 붙은 녹음을 글로 옮기고, 이어서 정리·번역까지 자동으로 합니다">전사</Button><Button variant="secondary" size="sm" icon="🈯" disabled={!cur||st.aiBusy} onClick={()=>ai('polish')} title="받아쓴 글의 오탈자·고유명사를 바로잡고 문단을 나눕니다. 외국어면 한국어 번역과 요점을 붙입니다">정리·번역</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
     {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
       <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
       <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
@@ -38341,7 +38468,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v3.6';
+const APP_VERSION='v3.7';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
