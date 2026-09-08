@@ -35996,8 +35996,10 @@ Store.dashscope=async function(action,payload){
   if(this.mode!=='supabase')throw new Error('Paraformer는 클라우드 모드에서만 씁니다 — 파일 주소를 넘겨야 하기 때문입니다');
   const base=dashBase(this.cfg.dashBase);
   if(this.cfg.dashBase&&!base)throw new Error('서비스 주소를 읽지 못했습니다 — 설정 › 음성의 서비스 주소를 비우면 기본 주소를 씁니다 (받은 값: '+this.cfg.dashBase+')');
-  const {data,error}=await this.sb.functions.invoke('paraformer',
-    {body:{action,base,model:this.cfg.dashModel||'qwen3-asr-flash-filetrans',...payload}});
+  const req={action,base,model:this.cfg.dashModel||'qwen3-asr-flash-filetrans',...payload};
+  console.log('[PMS 전사 요청]',req);
+  const {data,error}=await this.sb.functions.invoke('paraformer',{body:req});
+  console.log('[PMS 전사 응답]',data||error);
   if(error){let d='';try{const j=await error.context?.json();d=j&&j.error;}catch(_){}
     throw new Error(d||(/Failed to send|FunctionsFetchError/i.test(error.message)?"Edge Function 'paraformer'를 찾지 못했습니다 — 대시보드에 paraformer 이름으로 배포하세요 (가이드 11)":error.message));}
   if(data&&data.error){
@@ -36532,7 +36534,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.5.2'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.5.3'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -37925,7 +37927,12 @@ function KnowledgeView({db,setDb,st,set,toast}){
         const eng=Store.cfg.sttEngine==='paraformer'?'Paraformer':'Whisper';
         upd(cur.id,{md:cur.md+'\n\n## 녹취 ('+eng+')\n'+all.trim()+'\n'});
         toast('전사 완료 — 위키 정돈으로 다듬을 수 있습니다');
-      }catch(e){toast('⚠ '+e.message);}
+      }catch(e){
+        console.error('[PMS 전사 실패]',e.message);
+        /* 토스트는 길면 잘리므로 전문을 노트 아래에 남긴다 */
+        upd(cur.id,{md:cur.md+'\n\n> ⚠ 전사 실패 — '+e.message+'\n'});
+        toast('⚠ 전사 실패 — 자세한 내용을 노트 아래에 적어 두었습니다');
+      }
       set({aiBusy:false});return;
     }
     if(kind==='vision'){ /* 노트에 붙인 이미지를 Claude가 보고 글로 옮긴다 */
@@ -38370,7 +38377,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v3.5.2';
+const APP_VERSION='v3.5.3';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
