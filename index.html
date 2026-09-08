@@ -35680,6 +35680,26 @@ alter table pms_collections enable row level security;
 create policy "own rows" on pms_collections for all
   using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
 
+/* 5단계: 행 단위 저장. 메일·노트 한 건이 한 행이 되어 바뀐 것만 저장된다.
+   deleted_at 이 채워진 행 = 휴지통(30일 뒤 자동 삭제) */
+const ITEMS_SQL=`-- 행 단위 저장 전환: Supabase SQL Editor에서 1회 실행
+create table if not exists pms_items (
+  user_id uuid references auth.users(id) on delete cascade,
+  kind text not null,
+  item_id text not null,
+  data jsonb not null,
+  updated_at timestamptz default now(),
+  deleted_at timestamptz,
+  primary key (user_id, kind, item_id)
+);
+alter table pms_items enable row level security;
+create policy "own items" on pms_items for all
+  using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create index if not exists pms_items_live_idx on pms_items (user_id, kind) where deleted_at is null;`;
+const TRASH_DAYS=30;
+const isMissingTable=e=>e&&(e.code==='PGRST205'||e.code==='42P01'||/Could not find the table|does not exist/i.test(e.message||''));
+const titleOf=it=>it&&(it.subject||it.title||it.label||it.email)||'(제목 없음)';
+
 function seedData(){
   const t=todayISO(),y=new Date().getFullYear(),m=pad2(new Date().getMonth()+1);
   const d=n=>shiftDay(t,n);
@@ -35739,6 +35759,8 @@ const Store={
   /* 설정 우선순위: 이 브라우저에 저장한 값 > 호스팅 폴더의 pms.config.js(window.PMS_CONFIG) */
   cfg:{...(window.PMS_CONFIG||{}),...JSON.parse(localStorage.getItem('pms.cfg')||'{}')},
   mode:'local',sb:null,user:null,
+  rowMode:false,          /* true = 행 단위 저장(pms_items) · false = 예전 묶음 저장(pms_collections) */
+  snap:{},                /* 마지막으로 저장된 내용 — 무엇이 바뀌었는지 가려내는 기준 */
   saveCfg(c){this.cfg={...this.cfg,...c};localStorage.setItem('pms.cfg',JSON.stringify(this.cfg));},
   get cloudReady(){return !!(this.cfg.supabaseUrl&&this.cfg.supabaseKey);},
   async init(){
@@ -35770,26 +35792,101 @@ const Store={
     this.user={id:'local:'+email,email,name:email.split('@')[0]};sessionStorage.setItem('pms.session',JSON.stringify(this.user));return this.user;
   },
   async signUp(email,pw){if(this.mode==='supabase'){const {data,error}=await this.sb.auth.signUp({email,password:pw});if(error)throw new Error(explainSbError(error));if(data.session){this.user=this.userOf(data.user);}return true;}return this.signIn(email,pw);},
-  async signOut(){if(this.mode==='supabase')await this.sb.auth.signOut();sessionStorage.removeItem('pms.session');this.user=null;},
+  async signOut(){if(this.mode==='supabase')await this.sb.auth.signOut();sessionStorage.removeItem('pms.session');this.user=null;this.snap={};},
   key(kind){return 'pms.data.'+this.user.id+'.'+kind;},
+  trashKey(){return 'pms.trash.'+this.user.id;},
+  setSnap(db){KINDS.forEach(k=>{this.snap[k]=new Map((db[k]||[]).map(x=>[x.id,JSON.stringify(x)]));});},
   async loadAll(){
     const db={};
-    if(this.mode==='supabase'){const {data,error}=await this.sb.from('pms_collections').select('kind,data').eq('user_id',this.user.id);if(error)throw new Error(explainSbError(error));(data||[]).forEach(r=>db[r.kind]=r.data);
+    if(this.mode==='supabase'){
+      /* ① 행 단위(pms_items) 우선 — 테이블이 없으면 예전 방식으로 자동 전환 */
+      const r=await this.sb.from('pms_items').select('kind,item_id,data').eq('user_id',this.user.id).is('deleted_at',null);
+      if(r.error&&!isMissingTable(r.error))throw new Error(explainSbError(r.error));
+      this.rowMode=!r.error;
+      if(this.rowMode){
+        (r.data||[]).forEach(row=>{(db[row.kind]=db[row.kind]||[]).push(row.data);});
+        if(!(r.data||[]).length){ /* 처음 전환: 예전 묶음 데이터를 행으로 옮긴다 */
+          const o=await this.sb.from('pms_collections').select('kind,data').eq('user_id',this.user.id);
+          if(!o.error&&(o.data||[]).length){o.data.forEach(x=>{if(Array.isArray(x.data))db[x.kind]=x.data;});
+            const rows=[];KINDS.forEach(k=>(db[k]||[]).forEach(it=>rows.push({user_id:this.user.id,kind:k,item_id:it.id,data:it,updated_at:nowStamp(),deleted_at:null})));
+            if(rows.length){const {error}=await this.sb.from('pms_items').upsert(rows);if(!error)this.rowMigrated=rows.length;}}
+        }
+        this.purgeExpired();  /* 30일 지난 휴지통 정리 — 실패해도 무시 */
+      }else{
+        const {data,error}=await this.sb.from('pms_collections').select('kind,data').eq('user_id',this.user.id);
+        if(error)throw new Error(explainSbError(error));(data||[]).forEach(x=>db[x.kind]=x.data);
+      }
       if(!Object.keys(db).length){ /* 첫 클라우드 로그인: 같은 이메일의 로컬 데이터가 있으면 자동 이관 */
         const pre='pms.data.local:'+this.user.email+'.';let found=false;
         KINDS.forEach(k=>{const v=localStorage.getItem(pre+k);if(v){db[k]=JSON.parse(v);found=true;}});
-        if(found){for(const k of KINDS)if(db[k])await this.persist(k,db[k]);this.migrated=true;}
-      }}
+        if(found){this.snap={};for(const k of KINDS)if(db[k])await this.persist(k,db[k]);this.migrated=true;}
+      }
+    }
     else KINDS.forEach(k=>{const v=localStorage.getItem(this.key(k));if(v)db[k]=JSON.parse(v);});
-    /* 빠진 컬렉션 채우기: 한 번도 저장되지 않은 종류는 시드로 채우고, 클라우드면 즉시 저장해 다음 로드부터 4종이 모두 존재하게 한다 */
-    const s=seedData();const missing=KINDS.filter(k=>!Array.isArray(db[k]));
-    missing.forEach(k=>db[k]=s[k]);
-    if(this.mode==='supabase'&&missing.length)for(const k of missing)await this.persist(k,db[k]);
-    return migrateDb(db);
+    /* 빠진 컬렉션 채우기: 한 번도 저장되지 않은 종류는 시드로 채우고, 클라우드면 즉시 저장 */
+    const sd=seedData();const missing=KINDS.filter(k=>!Array.isArray(db[k]));
+    missing.forEach(k=>db[k]=sd[k]);
+    const out=migrateDb(db);
+    this.setSnap(out);
+    if(this.mode==='supabase'&&missing.length){this.snap={};for(const k of missing)await this.persist(k,out[k]);this.setSnap(out);}
+    return out;
   },
+  /* 저장 — 바뀐 항목만. 지운 항목은 바로 없애지 않고 휴지통(30일)으로 */
   async persist(kind,arr){
-    if(this.mode==='supabase'){const {error}=await this.sb.from('pms_collections').upsert({user_id:this.user.id,kind,data:arr,updated_at:nowStamp()});if(error)throw new Error(explainSbError(error));}
-    else localStorage.setItem(this.key(kind),JSON.stringify(arr));
+    const prev=this.snap[kind]||new Map();
+    const next=new Map((arr||[]).map(x=>[x.id,JSON.stringify(x)]));
+    const gone=[];prev.forEach((j,id)=>{if(!next.has(id))gone.push(id);});
+    if(this.mode==='supabase'&&this.rowMode){
+      const up=[];next.forEach((j,id)=>{if(prev.get(id)!==j)up.push({user_id:this.user.id,kind,item_id:id,data:JSON.parse(j),updated_at:nowStamp(),deleted_at:null});});
+      if(up.length){const {error}=await this.sb.from('pms_items').upsert(up);if(error)throw new Error(explainSbError(error));}
+      if(gone.length){const {error}=await this.sb.from('pms_items').update({deleted_at:nowStamp()}).eq('user_id',this.user.id).eq('kind',kind).in('item_id',gone);if(error)throw new Error(explainSbError(error));}
+    }
+    else if(this.mode==='supabase'){
+      const {error}=await this.sb.from('pms_collections').upsert({user_id:this.user.id,kind,data:arr,updated_at:nowStamp()});if(error)throw new Error(explainSbError(error));
+      if(gone.length)this.localTrash(kind,gone.map(id=>JSON.parse(prev.get(id))));
+    }
+    else{
+      localStorage.setItem(this.key(kind),JSON.stringify(arr));
+      if(gone.length)this.localTrash(kind,gone.map(id=>JSON.parse(prev.get(id))));
+    }
+    this.snap[kind]=next;
+  },
+  /* ── 휴지통 ── */
+  localTrash(kind,items){try{const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');
+    items.forEach(it=>t.push({kind,item:it,at:nowStamp()}));
+    const cut=Date.now()-TRASH_DAYS*864e5;
+    localStorage.setItem(this.trashKey(),JSON.stringify(t.filter(x=>new Date(x.at).getTime()>cut).slice(-500)));}catch(_){}},
+  async purgeExpired(){try{const cut=new Date(Date.now()-TRASH_DAYS*864e5).toISOString();
+    await this.sb.from('pms_items').delete().eq('user_id',this.user.id).lt('deleted_at',cut);}catch(_){}},
+  async listTrash(){
+    if(this.mode==='supabase'&&this.rowMode){
+      const {data,error}=await this.sb.from('pms_items').select('kind,item_id,data,deleted_at').eq('user_id',this.user.id).not('deleted_at','is',null).order('deleted_at',{ascending:false}).limit(300);
+      if(error)throw new Error(explainSbError(error));
+      return (data||[]).map(r=>({kind:r.kind,id:r.item_id,item:r.data,at:r.deleted_at}));}
+    try{return JSON.parse(localStorage.getItem(this.trashKey())||'[]').map(x=>({kind:x.kind,id:x.item.id,item:x.item,at:x.at})).reverse();}catch(_){return [];}
+  },
+  /* 되살리기: 휴지통에서 꺼내 항목을 돌려준다(화면에 다시 넣는 것은 호출한 쪽) */
+  async restore(kind,id){
+    if(this.mode==='supabase'&&this.rowMode){
+      const {data,error}=await this.sb.from('pms_items').update({deleted_at:null,updated_at:nowStamp()}).eq('user_id',this.user.id).eq('kind',kind).eq('item_id',id).select('data');
+      if(error)throw new Error(explainSbError(error));return data&&data[0]&&data[0].data;}
+    const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');const i=t.findIndex(x=>x.kind===kind&&x.item.id===id);
+    if(i<0)return null;const it=t[i].item;t.splice(i,1);localStorage.setItem(this.trashKey(),JSON.stringify(t));return it;
+  },
+  async purge(kind,id){
+    if(this.mode==='supabase'&&this.rowMode){const {error}=await this.sb.from('pms_items').delete().eq('user_id',this.user.id).eq('kind',kind).eq('item_id',id);if(error)throw new Error(explainSbError(error));return;}
+    const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');localStorage.setItem(this.trashKey(),JSON.stringify(t.filter(x=>!(x.kind===kind&&x.item.id===id))));
+  },
+  async emptyTrash(){
+    if(this.mode==='supabase'&&this.rowMode){const {error}=await this.sb.from('pms_items').delete().eq('user_id',this.user.id).not('deleted_at','is',null);if(error)throw new Error(explainSbError(error));return;}
+    localStorage.removeItem(this.trashKey());
+  },
+  /* 설정 화면: 행 단위 저장으로 전환됐는지 확인 */
+  async checkRowMode(){
+    if(this.mode!=='supabase')return {ok:false,msg:'로컬 저장 모드입니다 — 클라우드 연결 후 사용합니다'};
+    const {error}=await this.sb.from('pms_items').select('kind',{head:true,count:'exact'}).limit(1);
+    if(error)return {ok:false,msg:isMissingTable(error)?'테이블 pms_items 가 아직 없습니다 — 아래 SQL을 실행하세요':explainSbError(error)};
+    this.rowMode=true;return {ok:true,msg:'행 단위 저장이 켜져 있습니다 — 바뀐 항목만 저장됩니다'};
   },
   exportJSON(db){const blob=new Blob([JSON.stringify(db,null,1)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pms-backup-'+todayISO()+'.json';a.click();}
 };
@@ -35822,7 +35919,7 @@ async function askClaude(prompt,opt={}){
 }
 /* 설정 화면의 "Claude 테스트" */
 async function testClaude(){const t0=Date.now();const r=await askClaude('연결 테스트입니다. "연결 성공"이라고만 답하세요.',{max_tokens:20});return {ok:true,mode:claudeMode(),ms:Date.now()-t0,text:r};}
-Object.assign(window,{Store,explainSbError,CLAUDE_MODELS,claudeMode,testClaude,seedData,uid,pad2,isoDate,todayISO,shiftDay,nowStamp,askClaude,SUPABASE_SQL,KINDS});
+Object.assign(window,{Store,explainSbError,CLAUDE_MODELS,claudeMode,testClaude,seedData,uid,pad2,isoDate,todayISO,shiftDay,nowStamp,askClaude,SUPABASE_SQL,ITEMS_SQL,KINDS,titleOf,TRASH_DAYS});
 </script>
 <script type="text/babel">/* 공용: 마크다운 렌더러(React 요소), 위키링크 추출, ICS 변환, 반복 일정 전개, 폼 입력 */
 const WIKI_RE=/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
@@ -35977,7 +36074,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.3'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.4'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -35991,6 +36088,52 @@ function Login({onLogin}){
   </div>;
 }
 
+
+/* 저장 방식: 묶음 저장 → 행 단위 저장 전환 안내 */
+function RowModeSection({onToast}){
+  const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [r,setR]=React.useState(null);const [busy,setBusy]=React.useState(false);
+  const check=async()=>{setBusy(true);try{setR(await Store.checkRowMode());}catch(e){setR({ok:false,msg:e.message});}setBusy(false);};
+  React.useEffect(()=>{if(Store.mode==='supabase')setR({ok:Store.rowMode,msg:Store.rowMode?'행 단위 저장이 켜져 있습니다 — 바뀐 항목만 저장됩니다':'아직 묶음 저장입니다 — 아래 SQL을 한 번 실행하면 전환됩니다'});},[]);
+  return <div style={{marginTop:16,paddingTop:12,borderTop:'1px solid var(--border-default)'}}>
+    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+      <span style={{font:'var(--type-card-title)'}}>저장 방식</span>
+      {r&&<Badge tone={r.ok?'linked':'muted'}>{r.ok?'행 단위':'묶음'}</Badge>}
+      <span style={{marginLeft:'auto'}}><Button variant="ghost" size="xs" disabled={busy} onClick={check}>{busy?'확인 중…':'다시 확인'}</Button></span>
+    </div>
+    <InfoBar>지금까지는 노트 하나만 고쳐도 <b>그 종류 전체</b>를 다시 올렸습니다. 아래 SQL을 한 번 실행하면 <b>바뀐 항목 한 건만</b> 저장되어 노트·메일이 수천 건이 되어도 느려지지 않고, 지운 항목은 30일간 휴지통에 남습니다. 기존 데이터는 처음 열 때 자동으로 옮겨집니다.</InfoBar>
+    {r&&<div style={{fontSize:'var(--fs-sm)',color:r.ok?'var(--color-success)':'var(--text-muted)',margin:'6px 0'}}>{r.ok?'✓ ':'· '}{r.msg}</div>}
+    <pre style={{font:'11px/1.45 var(--font-mono)',background:'var(--surface-hover)',border:'1px solid var(--border-default)',padding:'8px 10px',borderRadius:4,maxHeight:170,overflow:'auto',margin:0,whiteSpace:'pre-wrap'}}>{ITEMS_SQL}</pre>
+    <div style={{marginTop:6}}><Button variant="ghost" size="sm" onClick={()=>{navigator.clipboard.writeText(ITEMS_SQL);onToast&&onToast('SQL 복사됨');}}>📋 SQL 복사</Button></div>
+  </div>;
+}
+/* 휴지통: 지운 메일·노트·일정을 30일간 보관 */
+const TRASH_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정'};
+function TrashModal({open,onClose,onRestore,onToast}){
+  const {Modal,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const [rows,setRows]=React.useState(null);const [busy,setBusy]=React.useState(false);
+  const load=async()=>{setBusy(true);try{setRows(await Store.listTrash());}catch(e){onToast&&onToast('⚠ '+e.message);setRows([]);}setBusy(false);};
+  React.useEffect(()=>{if(open)load();},[open]);
+  if(!open)return null;
+  const restore=async r=>{try{const it=await Store.restore(r.kind,r.id)||r.item;onRestore(r.kind,it);setRows(rs=>rs.filter(x=>!(x.kind===r.kind&&x.id===r.id)));onToast&&onToast('되살림 · '+titleOf(it));}catch(e){onToast&&onToast('⚠ '+e.message);}};
+  const purge=async r=>{if(!window.confirm('완전히 지울까요? 되돌릴 수 없습니다.\n\n'+titleOf(r.item)))return;
+    try{await Store.purge(r.kind,r.id);setRows(rs=>rs.filter(x=>!(x.kind===r.kind&&x.id===r.id)));}catch(e){onToast&&onToast('⚠ '+e.message);}};
+  const empty=async()=>{if(!window.confirm('휴지통을 비울까요? 되돌릴 수 없습니다.'))return;
+    try{await Store.emptyTrash();setRows([]);onToast&&onToast('휴지통을 비웠습니다');}catch(e){onToast&&onToast('⚠ '+e.message);}};
+  return <Modal open={open} onClose={onClose} title={'🗑 휴지통'} width={640}
+    footer={<><Button variant="ghost" size="sm" onClick={empty} disabled={!rows||!rows.length}>휴지통 비우기</Button><span style={{marginLeft:'auto'}}><Button variant="gray" onClick={onClose}>닫기</Button></span></>}>
+    <InfoBar>지운 항목은 {TRASH_DAYS}일간 여기 남아 있다가 자동으로 사라집니다. 되살리면 원래 자리로 돌아갑니다.</InfoBar>
+    {busy&&<div style={{padding:20,color:'var(--text-label)',textAlign:'center'}}>불러오는 중…</div>}
+    {rows&&!rows.length&&!busy&&<div style={{padding:26,color:'var(--text-label)',textAlign:'center'}}>비어 있습니다</div>}
+    {(rows||[]).map(r=><div key={r.kind+r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 4px',borderBottom:'1px solid var(--border-default)'}}>
+      <Badge tone="muted">{TRASH_LABEL[r.kind]||r.kind}</Badge>
+      <span style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:'var(--fs-md)'}}>{titleOf(r.item)}</span>
+      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)'}}>{String(r.at).slice(5,16).replace('T',' ')}</span>
+      <Button variant="gray" size="xs" onClick={()=>restore(r)}>되살리기</Button>
+      <Button variant="ghost" size="xs" onClick={()=>purge(r)}>완전 삭제</Button>
+    </div>)}
+  </Modal>;
+}
 function SettingsModal({open,onClose,onToast}){
   const {Button,InfoBar,Modal}=window.HDWorkbookDesignSystem_ad60e4;
   const [c,setC]=React.useState(Store.cfg);const [tab,setTab]=React.useState('cloud');const [test,setTest]=React.useState(null);const [testing,setTesting]=React.useState(false);
@@ -36013,6 +36156,7 @@ function SettingsModal({open,onClose,onToast}){
       <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',margin:'4px 0'}}>테이블 생성 SQL (SQL Editor에서 1회 실행)</div>
       <pre style={{font:'11px/1.45 var(--font-mono)',background:'var(--surface-hover)',border:'1px solid var(--border-default)',padding:'8px 10px',borderRadius:4,maxHeight:150,overflow:'auto',margin:0,whiteSpace:'pre-wrap'}}>{SUPABASE_SQL}</pre>
       <div style={{marginTop:6}}><Button variant="ghost" size="sm" onClick={()=>{navigator.clipboard.writeText(SUPABASE_SQL);onToast&&onToast('SQL 복사됨');}}>📋 SQL 복사</Button></div>
+      <RowModeSection onToast={onToast}/>
     </>}
     {tab==='mail'&&<>
       <div style={{font:'var(--type-card-title)',marginBottom:6}}>회사 메일 (Outlook)</div>
@@ -36050,7 +36194,7 @@ function ClaudeTab({c,setC}){
     </div>
   </>;
 }
-Object.assign(window,{Login,SettingsModal});
+Object.assign(window,{TrashModal,Login,SettingsModal});
 </script>
 <script type="text/babel">/* 메일 관리: 계정/폴더 내비 · 목록 | 읽기 · 작성 · 가져오기 · 계정 연결 */
 const FOLDERS=[{id:'inbox',num:'①',label:'받은편지함'},{id:'starred',num:'②',label:'별표'},{id:'sent',num:'③',label:'보낸편지함'},{id:'draft',num:'④',label:'임시보관'},{id:'archive',num:'⑤',label:'보관'}];
@@ -37008,7 +37152,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v2.3';
+const APP_VERSION='v2.4';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
@@ -37020,13 +37164,17 @@ function PmsApp(){
 function Shell({user,onLogout}){
   const NS=window.HDWorkbookDesignSystem_ad60e4;const {AppHeader,SessionBar,SessionDivider,ZoneSegment,NavSidebar,Button,Badge,Toast,InfoBar}=NS;
   const [db,setDbRaw]=React.useState(null);const [zone,setZone]=React.useState(localStorage.getItem('pms.zone')||'mail');
-  const [saved,setSaved]=React.useState('');const [toastMsg,setToastMsg]=React.useState('');const [cfgOpen,setCfg]=React.useState(false);const [err,setErr]=React.useState('');
+  const [trashOpen,setTrash]=React.useState(false);const [saved,setSaved]=React.useState('');const [toastMsg,setToastMsg]=React.useState('');const [cfgOpen,setCfg]=React.useState(false);const [err,setErr]=React.useState('');
   const [mailSt,setMailSt]=React.useState({acc:'all',folder:'inbox',sel:null,picked:[]});const [calSt,setCalSt]=React.useState({view:'month',sub:'month',cals:{work:true,personal:true},anchor:todayISO()});const [kbSt,setKbSt]=React.useState({view:'notes',tag:'',scopes:{work:true,personal:true},picked:[],sel:null,mode:'split'});
   const timers=React.useRef({});
-  React.useEffect(()=>{Store.loadAll().then(d=>{setDbRaw(d);if(Store.migrated)setTimeout(()=>toast('로컬 데이터를 클라우드로 이관했습니다'),400);}).catch(e=>setErr('데이터 로드 실패: '+e.message+' — 테이블 SQL을 실행했는지 확인하세요'));},[]);
+  React.useEffect(()=>{Store.loadAll().then(d=>{setDbRaw(d);
+    if(Store.migrated)setTimeout(()=>toast('로컬 데이터를 클라우드로 이관했습니다'),400);
+    else if(Store.rowMigrated)setTimeout(()=>toast('행 단위 저장으로 전환 · '+Store.rowMigrated+'건 이관'),400);}).catch(e=>setErr('데이터 로드 실패: '+e.message+' — 테이블 SQL을 실행했는지 확인하세요'));},[]);
   React.useEffect(()=>localStorage.setItem('pms.zone',zone),[zone]);
   const toast=m=>{setToastMsg(m);clearTimeout(timers.current.t);timers.current.t=setTimeout(()=>setToastMsg(''),1600);};
   const setDb=(kind,arr)=>{setDbRaw(d=>({...d,[kind]:arr}));setSaved('saving');clearTimeout(timers.current[kind]);timers.current[kind]=setTimeout(async()=>{try{await Store.persist(kind,arr);setSaved(new Date().toTimeString().slice(0,8));}catch(e){setSaved('error');toast('⚠ 저장 실패: '+e.message);}},700);};
+  /* 휴지통에서 되살리기 — 평소 저장 경로를 그대로 타서 화면과 저장소가 함께 되돌아온다 */
+  const restoreItem=(kind,item)=>{if(!item)return;const cur=db[kind]||[];if(cur.some(x=>x.id===item.id))return;setDb(kind,[...cur,item]);};
   const sendToNote=src=>{const n=newNote(src.subject,'work',`# ${src.subject}\n\n${src.from?'보낸 사람: '+src.from+'  \n':''}${src.date?'날짜: '+fmtDT(src.date)+'  \n':''}\n${src.body||''}\n\n---\n출처: ${src.from?'메일':'일정'}`);setDb('notes',[...db.notes,n]);setKbSt(s=>({...s,sel:n.id,view:'notes'}));setZone('kb');toast('노트로 저장');};
   const sendToEvent=m=>{setCalSt(s=>({...s,edit:{...emptyEvent(todayISO()),title:m.subject,notes:'메일: '+m.from+'\n\n'+m.body.slice(0,300)}}));setZone('cal');};
   if(err)return <div style={{padding:40}}><InfoBar tone="warn">{err}</InfoBar><Button variant="gray" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button><SettingsModal open={cfgOpen} onClose={()=>setCfg(false)} onToast={toast}/></div>;
@@ -37036,7 +37184,7 @@ function Shell({user,onLogout}){
   const unread=db.mails.filter(m=>m.folder==='inbox'&&!m.read).length;const todayN=expandEvents(db.events,todayISO(),todayISO()).length;
   const savedBadge=saved==='saving'?'⏳ 저장 중…':saved==='error'?'⚠ 저장 실패':saved?'✓ 자동저장됨 · '+saved:'✓ 불러옴';
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
-    <AppHeader mark="🗂" title="개인 업무 관리" version={APP_VERSION} tools={<><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
+    <AppHeader mark="🗂" title="개인 업무 관리" version={APP_VERSION} tools={<><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)} title={'지운 항목 보관함('+TRASH_DAYS+'일)'}>🗑 휴지통</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
     <SessionBar icon="🗂" name={user.name+' 워크스페이스'} right={<ZoneSegment items={ZONES.map(z=>({...z,label:z.label+(z.id==='mail'&&unread?' · '+unread:z.id==='cal'&&todayN?' · '+todayN:'')}))} value={zone} onChange={setZone}/>}>
       <Badge tone="pill">{savedBadge}</Badge><SessionDivider/>
       {Store.mode==='supabase'?<Badge tone="linked">☁ Supabase · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill" style={{cursor:'pointer'}} onClick={()=>setCfg(true)}>💾 로컬 저장 · 클릭해 클라우드 연결</Badge>}
@@ -37051,6 +37199,7 @@ function Shell({user,onLogout}){
       </main>
     </div>
     <SettingsModal open={cfgOpen} onClose={()=>setCfg(false)} onToast={toast}/>
+    <TrashModal open={trashOpen} onClose={()=>setTrash(false)} onRestore={restoreItem} onToast={toast}/>
     <Toast open={!!toastMsg}>{toastMsg}</Toast>
   </div>;
 }
