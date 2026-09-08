@@ -35921,9 +35921,57 @@ async function askClaude(prompt,opt={}){
     throw new Error(Store.mode==='supabase'?'Claude 연결이 없습니다 — 설정 › Claude 탭 참고':'Supabase를 먼저 연결하거나 설정에 Anthropic API 키를 입력하세요');
   }catch(e){throw new Error(explainClaudeError(e,mode));}
 }
+/* ── 음성 전사(OpenAI Whisper) — Edge Function 'transcribe' 경유(권장) 또는 브라우저 직접 ── */
+const STT_MODELS=[{id:'whisper-1',label:'whisper-1 · 표준(권장)'},{id:'gpt-4o-mini-transcribe',label:'gpt-4o-mini-transcribe · 더 정확, 조금 비쌈'}];
+function sttMode(){const c=Store.cfg;
+  if(c.sttVia==='direct'&&c.openaiKey)return 'direct';
+  if(Store.mode==='supabase'&&c.sttVia!=='direct')return 'edge';
+  if(c.openaiKey)return 'direct';return 'none';}
+function explainSttError(e){const m=(e&&e.message)||String(e);
+  if(/OPENAI_API_KEY/i.test(m))return m;
+  if(/Failed to send a request to the Edge Function|FunctionsFetchError/i.test(m))return "Edge Function 'transcribe'를 찾지 못했습니다 — 대시보드 Edge Functions에 transcribe 이름으로 배포하세요 (가이드 11)";
+  if(/FunctionsHttpError/i.test(m))return '전사 함수가 오류를 반환했습니다 — 함수 Logs 탭에서 원인 확인';
+  if(/invalid_api_key|Incorrect API key/i.test(m))return 'OpenAI API 키가 잘못됐습니다 — platform.openai.com에서 키를 다시 발급하세요';
+  if(/quota|billing|insufficient/i.test(m))return 'OpenAI 크레딧이 없습니다 — platform.openai.com › Billing에서 충전하세요';
+  if(/rate limit|429/i.test(m))return '요청 한도 초과 — 잠시 후 다시 시도하세요';
+  if(/too large|413|maximum content size/i.test(m))return '음성 조각이 너무 큽니다 — 더 짧게 나눠 보내야 합니다';
+  return m;}
+Store.transcribe=async function(blob,opt={}){
+  const mode=sttMode();const model=Store.cfg.sttModel||STT_MODELS[0].id;
+  try{
+    if(mode==='edge'){
+      const audio=await blobB64(blob);
+      const {data,error}=await this.sb.functions.invoke('transcribe',
+        {body:{audio,mime:blob.type||'audio/webm',name:(opt.name||'audio')+'.'+((blob.type||'').includes('wav')?'wav':'webm'),language:opt.language||'ko',model,prompt:opt.prompt||''}});
+      if(error){let d='';try{const j=await error.context?.json();d=j&&j.error;}catch(_){}throw new Error(d||error.message);}
+      if(data&&data.error)throw new Error(data.error);
+      return data.text;
+    }
+    if(mode==='direct'){
+      const fd=new FormData();
+      fd.append('file',blob,(opt.name||'audio')+'.'+((blob.type||'').includes('wav')?'wav':'webm'));
+      fd.append('model',model);fd.append('response_format','text');
+      if(opt.language)fd.append('language',opt.language);
+      if(opt.prompt)fd.append('prompt',opt.prompt.slice(0,800));
+      const r=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+Store.cfg.openaiKey},body:fd});
+      const t=await r.text();
+      if(!r.ok){let m=t;try{m=JSON.parse(t)?.error?.message||t;}catch(_){}throw new Error(m);}
+      return t;
+    }
+    throw new Error(Store.mode==='supabase'
+      ? "전사 연결이 없습니다 — Edge Function 'transcribe' 배포와 OPENAI_API_KEY 비밀을 확인하세요 (설정 › 음성)"
+      : 'Supabase를 연결하거나 설정 › 음성에 OpenAI API 키를 입력하세요');
+  }catch(e){throw new Error(explainSttError(e));}
+};
+async function testStt(){ /* 1초짜리 무음을 보내 연결만 확인 */
+  const rate=16000,n=rate;const s=new Float32Array(n);
+  for(let i=0;i<n;i++)s[i]=Math.sin(i*0.02)*0.02;
+  const t0=Date.now();const r=await Store.transcribe(wavBlob(s,rate),{name:'test',language:'ko'});
+  return {ok:true,mode:sttMode(),ms:Date.now()-t0,text:(r||'').trim().slice(0,40)};
+}
 /* 설정 화면의 "Claude 테스트" */
 async function testClaude(){const t0=Date.now();const r=await askClaude('연결 테스트입니다. "연결 성공"이라고만 답하세요.',{max_tokens:20});return {ok:true,mode:claudeMode(),ms:Date.now()-t0,text:r};}
-Object.assign(window,{Store,explainSbError,CLAUDE_MODELS,claudeMode,testClaude,seedData,uid,pad2,isoDate,todayISO,shiftDay,nowStamp,askClaude,SUPABASE_SQL,ITEMS_SQL,KINDS,titleOf,TRASH_DAYS});
+Object.assign(window,{Store,explainSbError,CLAUDE_MODELS,STT_MODELS,sttMode,testStt,explainSttError,claudeMode,testClaude,seedData,uid,pad2,isoDate,todayISO,shiftDay,nowStamp,askClaude,SUPABASE_SQL,ITEMS_SQL,KINDS,titleOf,TRASH_DAYS});
 </script>
 <script type="text/babel">/* 공용: 마크다운 렌더러(React 요소), 위키링크 추출, ICS 변환, 반복 일정 전개, 폼 입력 */
 const WIKI_RE=/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
@@ -35941,6 +35989,7 @@ function renderInline(text,onWiki,key){
     else if(m[5]){const [tgt,alias]=t.slice(2,-2).split('|');out.push(<a key={k++} href="#" onClick={e=>{e.preventDefault();onWiki&&onWiki(tgt.trim());}} style={{color:'var(--color-accent)',borderBottom:'1px dashed var(--wb-blue-300)'}}>{(alias||tgt).trim()}</a>);}
     else if(m[6]){const mm=/^(!?)\[([^\]]*)\]\(([^)]+)\)$/.exec(t);const bang=mm[1],label=mm[2],href=mm[3].trim();
       if(bang)out.push(<PmsImg key={k++} src={href} alt={label}/>);                       /* 이미지 */
+      else if(/^pms:/.test(href)&&AUDIO_EXT.test(href))out.push(<PmsAudio key={k++} src={href} label={label}/>); /* 음성 */
       else if(/^pms:/.test(href))out.push(<PmsLink key={k++} src={href}>{label}</PmsLink>); /* 첨부 파일 */
       else out.push(<a key={k++} href={href} target="_blank" rel="noreferrer">{label}</a>);}
     i=m.index+t.length;}
@@ -36120,6 +36169,120 @@ async function filesToMd(list,onStep){
 }
 Object.assign(window,{Files,FILES_SQL,BUCKET,PmsImg,PmsLink,pmsRefs,filesToMd,shrinkImage,b64of});
 </script>
+<script type="text/babel">/* ── 음성: 녹음 · 전사 ─────────────────────────────────────────────
+   녹음  — 브라우저 MediaRecorder. 긴 회의는 15분마다 조각을 끊어 저장한다(한 파일이 커지면 다루기 어렵다)
+   전사  — OpenAI Whisper. 키는 Supabase Secrets에만 두고 Edge Function 'transcribe'를 거친다
+   큰 파일은 16kHz 모노 WAV 조각으로 잘라 차례로 보낸다(한 번에 보낼 수 있는 크기 제한 때문) */
+const AUDIO_EXT=/\.(webm|m4a|mp3|wav|ogg|oga|mp4|mpga|mpeg|flac)$/i;
+const SEG_SEC=150;                 /* 잘라 보낼 조각 길이(초) — 조각 하나가 base64로 약 6MB */
+const ONESHOT_MAX=45*1024*100;     /* 이보다 작으면(약 4.5MB) 자르지 않고 그대로 보낸다 */
+const REC_SPLIT_MS=15*60*1000;     /* 녹음 자동 분할 */
+const mmss=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+
+/* PCM → WAV(16bit 모노) */
+function wavBlob(samples,rate){
+  const b=new ArrayBuffer(44+samples.length*2),v=new DataView(b);
+  const str=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
+  str(0,'RIFF');v.setUint32(4,36+samples.length*2,true);str(8,'WAVE');str(12,'fmt ');
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+  str(36,'data');v.setUint32(40,samples.length*2,true);
+  let o=44;for(let i=0;i<samples.length;i++){const s=Math.max(-1,Math.min(1,samples[i]));v.setInt16(o,s<0?s*0x8000:s*0x7fff,true);o+=2;}
+  return new Blob([b],{type:'audio/wav'});
+}
+/* 음성 파일 → 16kHz 모노 WAV 조각들 */
+async function toWavSegments(blob,onStep){
+  const AC=window.AudioContext||window.webkitAudioContext;
+  const ctx=new AC();
+  let buf;
+  try{buf=await ctx.decodeAudioData(await blob.arrayBuffer());}
+  catch(e){ctx.close();throw new Error('음성 파일을 읽지 못했습니다 — mp3·m4a·wav·webm 형식인지 확인하세요');}
+  const dur=buf.duration;ctx.close();
+  if(dur>3*3600)throw new Error('3시간이 넘는 녹음은 나눠서 올려주세요');
+  const RATE=16000,ch=buf.numberOfChannels;
+  const segs=[];const n=Math.ceil(dur/SEG_SEC);
+  for(let s=0;s<n;s++){
+    onStep&&onStep('자르는 중 '+(s+1)+'/'+n);
+    const from=s*SEG_SEC,len=Math.min(SEG_SEC,dur-from);
+    const off=new (window.OfflineAudioContext||window.webkitOfflineAudioContext)(1,Math.ceil(len*RATE),RATE);
+    const src=off.createBufferSource();
+    /* 필요한 구간만 새 버퍼로 복사(모노로 합침) */
+    const srcRate=buf.sampleRate,a=Math.floor(from*srcRate),b=Math.min(buf.length,Math.floor((from+len)*srcRate));
+    const tmp=off.createBuffer(1,b-a,srcRate);const out=tmp.getChannelData(0);
+    for(let c=0;c<ch;c++){const d=buf.getChannelData(c);for(let i=a;i<b;i++)out[i-a]+=d[i]/ch;}
+    src.buffer=tmp;src.connect(off.destination);src.start();
+    const rendered=await off.startRendering();
+    segs.push(wavBlob(rendered.getChannelData(0),RATE));
+  }
+  return segs;
+}
+const blobB64=blob=>new Promise((ok,err)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(',')[1]);r.onerror=()=>err(r.error);r.readAsDataURL(blob);});
+
+/* 한 파일 전사 — 필요하면 잘라서 차례로 */
+async function transcribeBlob(blob,opt={}){
+  const onStep=opt.onStep||(()=>{});
+  let parts;
+  if(blob.size<=ONESHOT_MAX)parts=[blob];
+  else{onStep('긴 녹음을 자르는 중…');parts=await toWavSegments(blob,onStep);}
+  const texts=[];
+  for(let i=0;i<parts.length;i++){
+    onStep('전사 중 '+(i+1)+'/'+parts.length+(parts.length>1?' 조각':''));
+    const t=await Store.transcribe(parts[i],{
+      name:(opt.name||'audio')+(parts.length>1?('.part'+(i+1)):''),
+      language:opt.language||Store.cfg.sttLang||'ko',
+      prompt:texts.length?texts[texts.length-1].slice(-400):'',   /* 앞 조각 끝을 힌트로 — 이름·용어가 이어지게 */
+    });
+    texts.push((t||'').trim());
+  }
+  return texts.filter(Boolean).join('\n\n');
+}
+/* 노트 본문에서 음성 첨부 찾기 */
+const audioRefs=md=>pmsRefs(md).filter(r=>AUDIO_EXT.test(r.path)||/🎙/.test(r.raw));
+
+/* 재생기 — pms: 음성 링크는 재생 막대로 */
+function PmsAudio({src,label}){
+  const [u,setU]=React.useState(null);const [err,setErr]=React.useState('');
+  React.useEffect(()=>{let live=true;Files.url(src.slice(4)).then(x=>live&&setU(x)).catch(e=>live&&setErr(e.message));return()=>{live=false;};},[src]);
+  if(err)return <span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)'}}>🎙 {label} — {err}</span>;
+  return <span style={{display:'inline-flex',alignItems:'center',gap:8,margin:'4px 0'}}>
+    <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>🎙 {label}</span>
+    {u?<audio src={u} controls preload="none" style={{height:32,verticalAlign:'middle'}}/>:<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>불러오는 중…</span>}
+  </span>;
+}
+/* 녹음 단추 — 노트 편집 도구줄에 붙는다 */
+function RecButton({onDone,onErr}){
+  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const [on,setOn]=React.useState(false);const [sec,setSec]=React.useState(0);
+  const R=React.useRef({rec:null,chunks:[],stream:null,timer:null,part:0});
+  const stopAll=()=>{const r=R.current;clearInterval(r.timer);
+    if(r.stream)r.stream.getTracks().forEach(t=>t.stop());
+    r.rec=null;r.stream=null;setOn(false);setSec(0);};
+  const flush=(final)=>{const r=R.current;const blob=new Blob(r.chunks,{type:r.chunks[0]?r.chunks[0].type:'audio/webm'});
+    r.chunks=[];if(blob.size>2000)onDone(blob,++r.part,final);};
+  const start=async()=>{
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true}});
+      const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(m=>window.MediaRecorder&&MediaRecorder.isTypeSupported(m))||'';
+      const rec=new MediaRecorder(stream,mime?{mimeType:mime,audioBitsPerSecond:48000}:undefined);
+      R.current={rec,chunks:[],stream,timer:null,part:0};
+      rec.ondataavailable=e=>{if(e.data&&e.data.size)R.current.chunks.push(e.data);};
+      rec.onstop=()=>{const wasSplit=R.current.split;R.current.split=false;flush(!wasSplit);
+        if(wasSplit&&R.current.stream){try{R.current.rec.start();}catch(_){}}else stopAll();};
+      rec.start();setOn(true);setSec(0);
+      R.current.timer=setInterval(()=>setSec(s=>{
+        const n=s+1;
+        if(n*1000>=REC_SPLIT_MS){R.current.split=true;try{R.current.rec.stop();}catch(_){}return 0;} /* 15분마다 조각내기 */
+        return n;}),1000);
+    }catch(e){onErr&&onErr(/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message);}
+  };
+  const stop=()=>{const r=R.current;if(!r.rec)return;r.split=false;try{r.rec.stop();}catch(_){stopAll();}};
+  React.useEffect(()=>()=>{const r=R.current;clearInterval(r.timer);if(r.stream)r.stream.getTracks().forEach(t=>t.stop());},[]);
+  return on
+    ? <Button variant="danger" size="xs" onClick={stop} title="녹음 정지">■ {mmss(sec)}</Button>
+    : <Button variant="ghost" size="xs" onClick={start} title="이 노트에 음성 녹음 (15분마다 자동으로 조각냅니다)">● 녹음</Button>;
+}
+Object.assign(window,{AUDIO_EXT,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,RecButton,mmss,blobB64,SEG_SEC});
+</script>
 <script type="text/babel">/* Gmail 연동: Google Identity Services(브라우저 OAuth 토큰) + Gmail REST API
    흐름: 연결(승인 창) → 토큰(1시간) → 받은편지함/보낸편지함 가져오기 · 보내기
    토큰은 sessionStorage에만 보관(탭 닫으면 사라짐). 비밀 키 없음 — 사용자가 Google 창에서 직접 승인 */
@@ -36209,7 +36372,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.7'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.8'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36288,6 +36451,35 @@ function FilesSection({onToast}){
     <div style={{marginTop:6}}><Button variant="ghost" size="sm" onClick={()=>{navigator.clipboard.writeText(FILES_SQL);onToast&&onToast('SQL 복사됨');}}>📋 SQL 복사</Button></div>
   </div>;
 }
+
+/* 음성 전사 설정 */
+function SttTab({c,setC}){
+  const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [t,setT]=React.useState(null);const [busy,setBusy]=React.useState(false);
+  const cloud=Store.mode==='supabase';const via=c.sttVia||(cloud?'edge':'direct');
+  const run=async()=>{setBusy(true);setT(null);const prev=Store.cfg;
+    Store.saveCfg({sttVia:via,sttModel:c.sttModel,openaiKey:c.openaiKey,sttLang:c.sttLang});
+    try{setT(await testStt());}catch(e){setT({ok:false,msg:e.message});}
+    Store.cfg=prev;localStorage.setItem('pms.cfg',JSON.stringify(prev));setBusy(false);};
+  const Radio=({id,label,sub,disabled})=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 10px',border:'1px solid '+(via===id?'var(--color-accent)':'var(--border-default)'),borderRadius:4,marginBottom:6,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.5:1}}>
+    <input type="radio" name="sttVia" checked={via===id} disabled={disabled} onChange={()=>setC({...c,sttVia:id})} style={{marginTop:3}}/>
+    <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span><div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{sub}</div></span></label>;
+  return <>
+    <InfoBar>노트에서 <b>● 녹음</b>으로 회의를 녹음하거나 음성 파일을 첨부한 뒤 <b>🎧 전사</b>를 누르면 글로 옮깁니다. OpenAI Whisper를 씁니다 — 1시간 녹음에 약 400원, <b>녹음이 OpenAI 서버로 올라갑니다</b>(회사 자료라면 이 점을 감안하세요).</InfoBar>
+    <InfoBar>준비: ① platform.openai.com에서 API 키 발급 · 결제 수단 등록 ② Supabase 대시보드 › Edge Functions에 <code>transcribe</code> 함수 배포(소스 묶음의 supabase/functions/transcribe/index.ts) ③ Edge Functions › Secrets에 <code>OPENAI_API_KEY</code> 추가 — 가이드 11</InfoBar>
+    <Radio id="edge" label="Supabase Edge Function 경유 (권장)" sub={cloud?'OpenAI 키를 Supabase Secrets에만 보관합니다':'Supabase 연결 후 사용 가능'} disabled={!cloud}/>
+    <Radio id="direct" label="브라우저에서 직접 호출" sub="이 브라우저에 OpenAI 키를 저장합니다 — 개인 PC에서만 권장"/>
+    {via==='direct'&&<Field label="OpenAI API 키"><TextInput type="password" value={c.openaiKey||''} onChange={e=>setC({...c,openaiKey:e.target.value})} placeholder="sk-..."/></Field>}
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+      <Field label="전사 모델"><Select options={STT_MODELS} value={c.sttModel||'whisper-1'} onChange={v=>setC({...c,sttModel:v})} style={{width:'100%'}}/></Field>
+      <Field label="말하는 언어"><Select options={[{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'zh',label:'중국어'},{id:'ja',label:'일본어'},{id:'',label:'자동 감지'}]} value={c.sttLang||'ko'} onChange={v=>setC({...c,sttLang:v})} style={{width:'100%'}}/></Field>
+    </div>
+    <div style={{display:'flex',alignItems:'center',gap:8,marginTop:4}}>
+      <Button variant="classic" size="sm" icon="🎧" disabled={busy} onClick={run}>{busy?'확인 중…':'전사 테스트'}</Button>
+      {t&&<span style={{fontSize:'var(--fs-sm)',color:t.ok?'var(--color-success)':'var(--color-danger)',lineHeight:1.4}}>{t.ok?`✓ 연결됨 · ${t.mode==='edge'?'Edge Function':'직접 호출'} · ${t.ms}ms`:'✗ '+t.msg}</span>}
+    </div>
+  </>;
+}
 function SettingsModal({open,onClose,onToast}){
   const {Button,InfoBar,Modal}=window.HDWorkbookDesignSystem_ad60e4;
   const [c,setC]=React.useState(Store.cfg);const [tab,setTab]=React.useState('cloud');const [test,setTest]=React.useState(null);const [testing,setTesting]=React.useState(false);
@@ -36296,7 +36488,7 @@ function SettingsModal({open,onClose,onToast}){
   const set=k=>e=>setC({...c,[k]:e.target.value});
   const prevUrl=Store.cfg.supabaseUrl||'',prevKey=Store.cfg.supabaseKey||'';
   const save=()=>{const clean={...c,supabaseUrl:(c.supabaseUrl||'').trim().replace(/\/+$/,''),supabaseKey:(c.supabaseKey||'').trim()};Store.saveCfg(clean);onClose();if(clean.supabaseUrl!==prevUrl||clean.supabaseKey!==prevKey)setTimeout(()=>location.reload(),300);else onToast&&onToast('설정 저장');};
-  const tabs=[{id:'cloud',label:'☁ 저장/계정'},{id:'mail',label:'✉ 메일 연동'},{id:'ai',label:'🤖 Claude'}];
+  const tabs=[{id:'cloud',label:'☁ 저장/계정'},{id:'mail',label:'✉ 메일 연동'},{id:'ai',label:'🤖 Claude'},{id:'stt',label:'🎙 음성'}];
   return <Modal open={open} onClose={onClose} title="연결 설정" width={560} footer={<><Button variant="gray" onClick={onClose}>취소</Button><Button variant="accent" icon="💾" onClick={save}>저장</Button></>}>
     <div style={{display:'flex',gap:4,borderBottom:'1px solid var(--border-default)',marginBottom:12}}>{tabs.map(t=><button key={t.id} type="button" onClick={()=>setTab(t.id)} style={{border:'none',background:'transparent',padding:'6px 10px',fontSize:'var(--fs-md)',fontWeight:tab===t.id?600:500,color:tab===t.id?'var(--text-body)':'var(--text-muted)',borderBottom:tab===t.id?'2px solid var(--wb-ink)':'2px solid transparent',cursor:'pointer',fontFamily:'inherit'}}>{t.label}</button>)}</div>
     {tab==='cloud'&&<>
@@ -36326,6 +36518,7 @@ function SettingsModal({open,onClose,onToast}){
         <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>Gmail이 프로모션 · 소셜 · 알림 · 포럼으로 분류한 메일과 스팸을 동기화에서 빼고 기본 메일함만 가져옵니다</div></span></label>
     </>}
     {tab==='ai'&&<ClaudeTab c={c} setC={setC}/>}
+    {tab==='stt'&&<SttTab c={c} setC={setC}/>}
   </Modal>;
 }
 
@@ -37408,6 +37601,23 @@ function KnowledgeView({db,setDb,st,set,toast}){
     upd(a.id,{md:removeWikiLink(a.md,b.title)});toast('연결 해제 · '+a.title+' → '+b.title);};
   const ai=async kind=>{if(!cur)return;set({aiBusy:true});
     const [main,raw]=splitRaw(cur.md);const src=main; /* 이미 정돈된 노트면 원문 섹션은 건드리지 않고 본문만 다시 정돈 */
+    if(kind==='stt'){ /* 붙어 있는 녹음을 차례로 글로 */
+      try{
+        const list=audioRefs(cur.md);
+        if(!list.length)throw new Error('노트에 음성 첨부가 없습니다');
+        let all='';
+        for(let i=0;i<list.length;i++){
+          const nm=(/\[([^\]]*)\]/.exec(list[i].raw)||[])[1]||('녹음 '+(i+1));
+          toast('전사 준비 '+(i+1)+'/'+list.length+' · '+nm);
+          const blob=await Files.blob(list[i].path);
+          const txt=await transcribeBlob(blob,{name:'note',onStep:m=>toast(nm+' · '+m)});
+          all+=(all?'\n\n':'')+'### '+nm.replace(/^🎙\s*/,'')+'\n'+txt;
+        }
+        upd(cur.id,{md:cur.md+'\n\n## 녹취 (Whisper)\n'+all.trim()+'\n'});
+        toast('전사 완료 — 위키 정돈으로 다듬을 수 있습니다');
+      }catch(e){toast('⚠ '+e.message);}
+      set({aiBusy:false});return;
+    }
     if(kind==='vision'){ /* 노트에 붙인 이미지를 Claude가 보고 글로 옮긴다 */
       try{
         const imgs=pmsRefs(cur.md).filter(r=>r.img).slice(0,3);
@@ -37458,7 +37668,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
   return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
     toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span></>}
-    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
+    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy||!audioRefs(cur&&cur.md).length} onClick={()=>ai('stt')} title="이 노트에 붙은 녹음을 글로 옮깁니다">전사</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
     {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
       <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
       <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
@@ -37503,8 +37713,10 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,onErr,titles=[]
   const wrap=(a,b)=>{const t=tRef.current;if(!t)return;const s=t.selectionStart,e=t.selectionEnd;const v=md.slice(0,s)+a+md.slice(s,e)+(b??a)+md.slice(e);setMd(v);setTimeout(()=>{t.focus();t.setSelectionRange(s+a.length,e+a.length);});};
   /* 커서 자리에 넣기 */
   const insert=(text)=>{const t=tRef.current;const s=t?t.selectionStart:md.length;
-    const v=md.slice(0,s)+(s&&md[s-1]!=='\n'?'\n\n':'')+text+'\n';setMd(v);
-    setTimeout(()=>{if(t){t.focus();const q=s+text.length+2;t.setSelectionRange(q,q);}});};
+    const before=md.slice(0,s),after=md.slice(s);      /* 뒷부분을 잃지 않도록 반드시 다시 붙인다 */
+    const gap=before&&!/\n\s*$/.test(before)?'\n\n':'';
+    const v=before+gap+text+(after&&!/^\s*\n/.test(after)?'\n\n':'\n')+after;setMd(v);
+    setTimeout(()=>{if(t){t.focus();const q=before.length+gap.length+text.length;t.setSelectionRange(q,q);}});};
   /* 이미지·PDF 붙여넣기 / 끌어놓기 → 올리고 마크다운 삽입 */
   const [up,setUp]=React.useState('');
   const takeFiles=async(list)=>{const fs=[...list].filter(f=>f&&f.size);if(!fs.length)return;
@@ -37525,8 +37737,13 @@ function NoteEditor({n,mode,upd,onWiki,backlinks,onPick,onDelete,onErr,titles=[]
     <div style={{display:'flex',gap:8,alignItems:'center',padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-muted)',flexWrap:'wrap'}}>
       <span style={{display:'inline-flex',gap:3}}>{SCOPES.map(c=><Chip key={c} on={(n.scope||'work')===c} color={SCOPE_COLOR[c]} onClick={()=>upd(n.id,{scope:c})}>● {SCOPE_LABEL[c]}</Chip>)}</span>
       <span>#</span><input value={(n.tags||[]).join(', ')} onChange={e=>upd(n.id,{tags:e.target.value.split(',').map(s=>s.trim()).filter(Boolean)})} placeholder="태그, 쉼표 구분" style={{...bare,flex:1,minWidth:120,fontSize:'var(--fs-sm)',borderBottom:'1px dashed var(--border-strong)'}}/>
-      {showEd&&<span style={{display:'flex',gap:2}}>{[['**','B'],['*','I'],['`','`'],['- [ ] ','☐',''],['## ','H2','']].map(([a,l,b])=><Button key={l} variant="ghost" size="xs" onClick={()=>wrap(a,b)}>{l}</Button>)}<Button variant="ghost" size="xs" title="노트 링크 삽입" onClick={()=>{const t=tRef.current;if(!t)return;const s0=t.selectionStart;const v=md.slice(0,s0)+'[['+md.slice(t.selectionEnd);setMd(v);setTimeout(()=>{t.focus();t.setSelectionRange(s0+2,s0+2);setAc(detect(v,s0+2));});}}>[[ ]]</Button><Button variant="ghost" size="xs" title="이미지·PDF 첨부 (붙여넣기·끌어놓기도 됨)" onClick={()=>document.getElementById('noteFile').click()}>📎</Button>
-        <input id="noteFile" type="file" accept="image/*,.pdf" multiple style={{position:'absolute',width:0,height:0,opacity:0,pointerEvents:'none'}} onChange={e=>{takeFiles(e.target.files);e.target.value='';}}/>
+      {showEd&&<span style={{display:'flex',gap:2}}>{[['**','B'],['*','I'],['`','`'],['- [ ] ','☐',''],['## ','H2','']].map(([a,l,b])=><Button key={l} variant="ghost" size="xs" onClick={()=>wrap(a,b)}>{l}</Button>)}<Button variant="ghost" size="xs" title="노트 링크 삽입" onClick={()=>{const t=tRef.current;if(!t)return;const s0=t.selectionStart;const v=md.slice(0,s0)+'[['+md.slice(t.selectionEnd);setMd(v);setTimeout(()=>{t.focus();t.setSelectionRange(s0+2,s0+2);setAc(detect(v,s0+2));});}}>[[ ]]</Button><Button variant="ghost" size="xs" title="이미지·PDF·음성 첨부 (붙여넣기·끌어놓기도 됨)" onClick={()=>document.getElementById('noteFile').click()}>📎</Button>
+        <RecButton onErr={m=>onErr&&onErr(m)} onDone={async(blob,part)=>{
+          try{const name='녹음 '+new Date().toISOString().slice(0,16).replace('T',' ')+(part>1?' ('+part+')':'')+'.webm';
+            const r=await Files.put(new File([blob],name,{type:blob.type||'audio/webm'}));
+            insert('[🎙 '+name+'](pms:'+r.path+')');}
+          catch(e){onErr&&onErr(e.message);}}}/>
+        <input id="noteFile" type="file" accept="image/*,.pdf,audio/*" multiple style={{position:'absolute',width:0,height:0,opacity:0,pointerEvents:'none'}} onChange={e=>{takeFiles(e.target.files);e.target.value='';}}/>
         <Button variant="ghost" size="xs" title="마크다운 문법" onClick={()=>setHelp(h=>!h)}>?</Button></span>}
       {up&&<span style={{fontSize:'var(--fs-sm)',color:'var(--color-accent)'}}>{up}</span>}
       <Button variant="ghost" size="xs" onClick={onDelete}>🗑</Button>
@@ -37843,7 +38060,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v2.7';
+const APP_VERSION='v2.8';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
