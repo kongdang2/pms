@@ -35913,7 +35913,7 @@ async function askClaude(prompt,opt={}){
     if(mode==='direct'){
       const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':Store.cfg.anthropicKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model,max_tokens:opt.max_tokens||1500,system:opt.system,messages:[{role:'user',content:prompt}]})});
       const j=await r.json();if(!r.ok)throw new Error(j.error?.message||'요청 실패');return j.content.map(c=>c.text||'').join('');}
-    if(mode==='preview')return window.claude.complete(prompt);
+    if(mode==='preview')return window.claude.complete((opt.system?opt.system+'\n\n---\n\n':'')+prompt);
     throw new Error(Store.mode==='supabase'?'Claude 연결이 없습니다 — 설정 › Claude 탭 참고':'Supabase를 먼저 연결하거나 설정에 Anthropic API 키를 입력하세요');
   }catch(e){throw new Error(explainClaudeError(e,mode));}
 }
@@ -35923,7 +35923,9 @@ Object.assign(window,{Store,explainSbError,CLAUDE_MODELS,claudeMode,testClaude,s
 </script>
 <script type="text/babel">/* 공용: 마크다운 렌더러(React 요소), 위키링크 추출, ICS 변환, 반복 일정 전개, 폼 입력 */
 const WIKI_RE=/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
-function wikiLinks(md){const s=new Set();let m;WIKI_RE.lastIndex=0;while((m=WIKI_RE.exec(md||'')))s.add(m[1].trim());return [...s];}
+/* 코드 블록·인라인 코드 안의 [[예시]]는 실제 링크가 아니다 (설명문에서 문법을 보여줄 때) */
+const stripCode=md=>(md||'').replace(/```[\s\S]*?```/g,' ').replace(/`[^`\n]*`/g,' ');
+function wikiLinks(md){const s=new Set();let m;const t=stripCode(md);WIKI_RE.lastIndex=0;while((m=WIKI_RE.exec(t)))s.add(m[1].trim());return [...s];}
 
 function renderInline(text,onWiki,key){
   const out=[];let i=0;const re=/(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(~~[^~]+~~)|(\[\[[^\]]+\]\])|(\[[^\]]+\]\([^)]+\))/g;let m,k=0;
@@ -35983,7 +35985,7 @@ const STATUS_LABEL={todo:'예정',doing:'진행중',done:'완료'};
 const STATUS_KEYS=['todo','doing','done'];
 const PRI_LABEL={high:'높음',mid:'보통',low:'낮음'};
 const fmtDT=iso=>{const d=new Date(iso);return isNaN(d)?iso:d.getMonth()+1+'/'+d.getDate()+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());};
-Object.assign(window,{HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
+Object.assign(window,{stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
 </script>
 <script type="text/babel">/* Gmail 연동: Google Identity Services(브라우저 OAuth 토큰) + Gmail REST API
    흐름: 연결(승인 창) → 토큰(1시간) → 받은편지함/보낸편지함 가져오기 · 보내기
@@ -36074,7 +36076,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.4'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v2.5'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36352,6 +36354,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
         <Button variant="gray" size="xs" onClick={()=>bulk({folder:'inbox'},'받은편지함으로')}>📥 받은편지함</Button>
         <span style={{color:'var(--text-label)'}}>|</span>
         {db.accounts.map(a=><Button key={a.id} variant="gray" size="xs" onClick={()=>bulk({acc:a.id},'→ '+a.label)}>→ {a.label}</Button>)}
+        <Button variant="secondary" size="xs" onClick={()=>set({ingest:db.mails.filter(m=>picked.includes(m.id)).map(m=>({kind:'mail',item:m}))})} title="선택한 메일을 개념 노트에 합칩니다">🤖 위키에 수집</Button>
         <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
         <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
       <div style={{display:'grid',gridTemplateColumns:'minmax(280px,360px) minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:'calc(100vh - 260px)'}}>
@@ -36366,7 +36369,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
           {cur&&<>
             <div style={{display:'flex',gap:6,flexWrap:'wrap',paddingBottom:10,borderBottom:'1px solid var(--border-default)',marginBottom:10}}>
               <TB onClick={()=>compose('reply')}>↩ 답장</TB><TB onClick={()=>compose('fwd')}>↪ 전달</TB><TB onClick={()=>upd(cur.id,{star:!cur.star})}>{cur.star?'★ 별표 해제':'☆ 별표'}</TB>
-              <TB onClick={()=>sendToNote(cur)}>📝 노트로</TB><TB onClick={()=>sendToEvent(cur)}>📅 일정으로</TB>
+              <TB onClick={()=>sendToNote(cur)}>📝 노트로</TB><TB onClick={()=>set({ingest:[{kind:'mail',item:cur}]})}>🤖 위키에 수집</TB><TB onClick={()=>sendToEvent(cur)}>📅 일정으로</TB>
               <span style={{marginLeft:'auto',display:'flex',gap:6}}><TB onClick={()=>{upd(cur.id,{folder:'archive'});set({sel:null});toast('보관됨');}}>🗄 보관</TB><Button variant="danger" size="sm" onClick={()=>{setDb('mails',db.mails.filter(m=>m.id!==cur.id));set({sel:null});toast('삭제됨');}}>🗑 삭제</Button></span>
             </div>
             <h3 style={{margin:'0 0 8px',font:'600 16.1px/1.35 var(--font-sans)'}}>{cur.subject}</h3>
@@ -36395,6 +36398,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendToEvent,openSettings}){
       </div>)}
       <div style={{marginTop:10}}><Button variant="ghost" size="sm" onClick={()=>{set({accOpen:false});openSettings('mail');}}>⚙ 연동 설정 열기</Button></div>
     </Modal>
+    <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null,picked:[]})}/>
   </>;
 }
 function MailRow({m,on,picked,onPick,acc,onClick,onStar}){const [h,setH]=React.useState(false);return <div onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)} style={{padding:'8px 12px 8px 8px',borderBottom:'1px solid var(--border-default)',background:on?'var(--surface-active)':h?'var(--surface-hover)':'#fff',display:'grid',gridTemplateColumns:'20px 16px 1fr auto',columnGap:6,fontSize:'var(--fs-base)',alignItems:'start'}}>
@@ -36675,13 +36679,299 @@ function EventPanel({ev,categories,onClose,onSave,onDelete,onNote}){
 }
 Object.assign(window,{CalendarView,calNav,CAL_VIEWS,emptyEvent,msList});
 </script>
+<script type="text/babel">/* ── LLM 위키 모드 ────────────────────────────────────────────────
+   ① 규칙 노트  — 위키의 문법·정돈 기준. 모든 위키 작업의 system 프롬프트가 된다
+   ② 물어보기   — 노트·메일·일정에서 근거를 찾아 답한다(Query)
+   ③ 수집       — 메일·메모를 기존 개념 노트에 합친다(Ingest)
+   ④ 점검       — 깨진 링크·고아 노트·오래된 노트를 찾아낸다(Lint)
+   검색은 글자를 찾고, 물어보기는 답을 만든다 — 둘은 다른 도구다 */
+
+const RULES_TITLE='위키 규칙';
+const RULES_TEMPLATE=`# 위키 규칙
+
+이 노트가 위키의 기준입니다. 물어보기 · 수집 · 정돈 · 점검이 모두 이 내용을 따릅니다. 마음대로 고치세요.
+
+## 노트 형식
+- 제목은 명사구 (예: 기준가격 산정)
+- 첫 줄은 한 문장 요약
+- 사실과 판단을 섞지 않는다 — 판단은 \`> 판단:\` 인용으로
+- 숫자는 단위와 기준 시점을 함께 적는다 (예: MOPJ 620 \$/t · 9월 1주)
+- 관련 개념은 \`## 관련\` 절에 [[링크]]로
+- 출처는 \`## 출처\` 절에 (메일 제목·날짜, 회의, 문서명)
+
+## 수집 규칙
+- 새 사실은 이미 있는 개념 노트에 합친다. 마땅한 노트가 없을 때만 새로 만든다
+- 값이 갱신되면 이전 값을 지우지 말고 \`(이전: …)\`로 남긴다
+- 원문 메일·메모는 버리지 않고 \`## 원문 메모\`로 접어 둔다
+
+## 금지
+- 추측을 사실처럼 쓰지 않는다. 불확실하면 \`#확인필요\` 태그를 단다
+- 한 노트에 여러 개념을 담지 않는다`;
+
+const getRulesNote=db=>(db.notes||[]).find(n=>n.title===RULES_TITLE);
+const wikiRules=db=>{const n=getRulesNote(db);return (n?n.md:RULES_TEMPLATE).slice(0,4000);};
+
+/* ── 찾기: 질문과 겹치는 말이 많은 자료를 고른다(로컬 계산, API 호출 없음) ── */
+const STOP=new Set(['그리고','하지만','어떻게','무엇','어디','언제','알려줘','정리해줘','해줘','대해','관련','내용','정보','이거','저거','우리','너무','정도','때문','대한','있는','없는','하는','되는']);
+function wTokens(s){return [...new Set((s||'').toLowerCase().replace(/[^0-9a-z가-힣]+/g,' ').split(' ')
+  .filter(t=>t.length>=2&&!STOP.has(t)))];}
+function wScore(toks,title,body){let s=0;const T=(title||'').toLowerCase(),B=(body||'').toLowerCase();
+  toks.forEach(t=>{if(T.includes(t))s+=4;
+    let i=0,c=0;while(c<4){const j=B.indexOf(t,i);if(j<0)break;c++;i=j+t.length;}s+=c;});
+  return s;}
+/* 질문과 관련된 노트·메일·일정을 점수순으로 */
+function wRetrieve(db,q,lim={notes:8,mails:6,events:6}){
+  const toks=wTokens(q);if(!toks.length)return {notes:[],mails:[],events:[],toks};
+  const pick=(arr,f,n)=>arr.map(x=>({x,s:f(x)})).filter(o=>o.s>0).sort((a,b)=>b.s-a.s).slice(0,n).map(o=>o.x);
+  return {
+    toks,
+    notes:pick((db.notes||[]).filter(n=>n.title!==RULES_TITLE),n=>wScore(toks,n.title,n.md),lim.notes),
+    mails:pick(db.mails||[],m=>wScore(toks,m.subject,m.body),lim.mails),
+    events:pick(db.events||[],e=>wScore(toks,e.title,(e.notes||'')+' '+(e.category||'')),lim.events),
+  };
+}
+const cut=(s,n)=>{s=s||'';return s.length>n?s.slice(0,n)+'\n…(줄임)':s;};
+function wContext(r){
+  const parts=[];
+  r.notes.forEach(n=>parts.push('### 노트: '+n.title+'\n'+cut(splitRaw(n.md)[0],1600)));
+  r.mails.forEach(m=>parts.push('### 메일: '+m.subject+'\n보낸 사람: '+m.from+' · 날짜: '+String(m.date).slice(0,16).replace('T',' ')+'\n'+cut(m.body,1100)));
+  r.events.forEach(e=>parts.push('### 일정: '+e.title+'\n'+e.date+(e.start?' '+e.start:'')+' · '+(STATUS_LABEL[e.status]||'')+(e.category?' · '+e.category:'')
+    +((e.milestones||[]).length?'\n마일스톤: '+e.milestones.map(m=>m.date+' '+m.title).join(' / '):'')+(e.notes?'\n'+cut(e.notes,600):'')));
+  return parts.join('\n\n');
+}
+/* ── 물어보기 ── */
+async function wikiAsk(db,q){
+  const r=wRetrieve(db,q);
+  const n=r.notes.length+r.mails.length+r.events.length;
+  if(!n)return {text:'관련된 자료를 찾지 못했습니다. 다른 낱말로 물어보거나, 먼저 그 내용을 노트로 적어두세요.',r};
+  const sys='너는 hong의 개인 업무 위키를 담당하는 사서다. 아래 위키 규칙을 지키고, 주어진 자료에 있는 내용만으로 한국어로 답한다.\n\n'
+    +'--- 위키 규칙 ---\n'+wikiRules(db);
+  const prompt='다음은 hong의 노트·메일·일정에서 질문과 관련해 찾아낸 자료다.\n\n'+wContext(r)
+    +'\n\n---\n질문: '+q
+    +'\n\n답변 형식:\n1) 결론을 2~4문장으로 먼저.\n2) 「근거」 목록 — 각 줄 끝에 출처를 노트면 [[노트 제목]], 메일이면 (메일: 제목), 일정이면 (일정: 제목) 형태로 붙인다.\n'
+    +'3) 자료에 없는 것은 지어내지 말고 「자료에 없음」이라고 적는다.\n4) 마지막 줄에 「위키에 추가하면 좋을 것: …」 한 줄.';
+  const text=await askClaude(prompt,{system:sys,max_tokens:1400});
+  return {text,r};
+}
+/* ── 수집: 원문 하나를 어느 개념 노트에 어떻게 합칠지 제안받는다 ── */
+function grabJSON(t){
+  const fence=/```(?:json)?\s*([\s\S]*?)```/.exec(t||'');
+  const cands=[fence&&fence[1],(()=>{const a=(t||'').indexOf('{'),b=(t||'').lastIndexOf('}');return a>=0&&b>a?t.slice(a,b+1):null;})()];
+  for(const c of cands){if(!c)continue;try{return JSON.parse(c);}catch(_){}}
+  return null;
+}
+const srcText=s=>s.kind==='mail'
+  ? '제목: '+s.item.subject+'\n보낸 사람: '+s.item.from+'\n날짜: '+String(s.item.date).slice(0,16).replace('T',' ')+'\n\n'+cut(s.item.body,4000)
+  : s.kind==='event'
+  ? '일정: '+s.item.title+'\n'+s.item.date+(s.item.start?' '+s.item.start:'')+'\n'+cut(s.item.notes||'',2000)
+  : '노트: '+s.item.title+'\n\n'+cut(s.item.md,4000);
+const srcTitle=s=>s.kind==='mail'?s.item.subject:s.item.title;
+const srcLabel=s=>s.kind==='mail'?'메일':s.kind==='event'?'일정':'노트';
+async function wikiIngest(db,notes,src){
+  const q=srcTitle(src)+' '+(src.kind==='mail'?cut(src.item.body,600):'');
+  const cand=wRetrieve({notes,mails:[],events:[]},q,{notes:5,mails:0,events:0}).notes;
+  const titles=notes.filter(n=>n.title!==RULES_TITLE).map(n=>n.title);
+  const sys='너는 hong의 개인 업무 위키를 관리한다. 아래 규칙에 맞춰 원문을 개념 노트로 흡수시킨다.\n\n--- 위키 규칙 ---\n'+wikiRules(db);
+  const prompt='## 지금 있는 노트 제목\n'+(titles.join(' · ')||'(없음)')
+    +'\n\n## 후보 노트 전문\n'+(cand.length?cand.map(n=>'### '+n.title+'\n'+cut(n.md,1800)).join('\n\n'):'(관련 노트 없음)')
+    +'\n\n## 흡수할 원문 ('+srcLabel(src)+')\n'+srcText(src)
+    +'\n\n원문의 새로운 사실을 가장 알맞은 개념 노트 하나에 합쳐라. 마땅한 노트가 없으면 새로 만든다.'
+    +' 기존 내용을 지우지 말고 갱신·추가하며, 원문은 노트 맨 아래 "## 원문 메모" 절에 접어 넣는다.'
+    +' 출처는 "## 출처" 절에 한 줄 추가한다.'
+    +'\n\n설명 없이 아래 JSON만 출력한다:\n'
+    +'{"target":"대상 노트 제목","isNew":true 또는 false,"scope":"work" 또는 "personal","why":"무엇을 왜 바꿨는지 한 줄","md":"노트 전체 마크다운(제목 # 부터)"}';
+  const raw=await askClaude(prompt,{system:sys,max_tokens:3000});
+  const j=grabJSON(raw);
+  if(!j||!j.md)throw new Error('제안을 이해하지 못했습니다 — 다시 시도하거나 원문이 너무 긴지 확인하세요');
+  const exist=notes.find(n=>n.title===j.target);
+  return {target:j.target||srcTitle(src),isNew:!exist,scope:j.scope||'work',why:j.why||'',md:j.md,before:exist?exist.md:'',id:exist?exist.id:null};
+}
+/* ── 점검: API 없이 로컬 계산 ── */
+function wikiLint(db){
+  const notes=(db.notes||[]).filter(n=>n.title!==RULES_TITLE);
+  const byTitle={};notes.forEach(n=>{byTitle[n.title]=n;});
+  const out=[];const now=Date.now();
+  const push=(type,note,label,extra)=>out.push({type,note,label,...extra});
+  const inLinks={};notes.forEach(n=>wikiLinks(n.md).forEach(t=>{inLinks[t]=(inLinks[t]||0)+1;}));
+  notes.forEach(n=>{
+    const links=wikiLinks(n.md);
+    links.forEach(t=>{if(!byTitle[t])push('broken',n,t,{link:t});});
+    if(!links.length&&!inLinks[n.title])push('orphan',n,'연결 없음');
+    if(splitRaw(n.md)[0].replace(/^#.*$/m,'').trim().length<40)push('thin',n,'내용이 거의 없음');
+    if(/#확인필요/.test(n.md))push('check',n,'확인 필요 표시');
+    if(!/^##\s*출처/m.test(n.md)&&splitRaw(n.md)[0].length>200)push('nosrc',n,'출처 절 없음');
+    const age=Math.round((now-new Date(n.updated||0).getTime())/864e5);
+    if(age>=120)push('stale',n,age+'일째 그대로',{age});
+  });
+  /* 제목이 겹치거나 낱말이 많이 겹치는 노트 짝 */
+  const tk=notes.map(n=>({n,t:new Set(wTokens(n.title+' '+splitRaw(n.md)[0].slice(0,600)))}));
+  const dup=[];
+  for(let i=0;i<tk.length;i++)for(let j=i+1;j<tk.length;j++){
+    const a=tk[i],b=tk[j];if(!a.t.size||!b.t.size)continue;
+    let inter=0;a.t.forEach(x=>{if(b.t.has(x))inter++;});
+    const sim=inter/Math.min(a.t.size,b.t.size);
+    if(sim>=0.55&&inter>=4)dup.push({a:a.n,b:b.n,sim});}
+  dup.sort((x,y)=>y.sim-x.sim);
+  return {issues:out,dup:dup.slice(0,8),total:notes.length};
+}
+const LINT_KIND={
+  broken:{label:'깨진 링크',desc:'가리키는 노트가 없습니다',tone:'warn'},
+  orphan:{label:'외딴 노트',desc:'들어오고 나가는 링크가 모두 없습니다',tone:'muted'},
+  thin:{label:'빈 노트',desc:'내용이 거의 없습니다',tone:'muted'},
+  check:{label:'확인 필요',desc:'#확인필요 표시가 남아 있습니다',tone:'warn'},
+  nosrc:{label:'출처 없음',desc:'규칙이 요구하는 ## 출처 절이 없습니다',tone:'muted'},
+  stale:{label:'오래된 노트',desc:'넉 달 넘게 손대지 않았습니다',tone:'muted'},
+};
+
+/* ══ 화면 ══════════════════════════════════════════════════ */
+const ASK_EXAMPLES=['9월 기준가격은 어떻게 잡았지?','이번 주에 회신해야 할 메일','손익추정 프로세스 요약해줘','최근에 정한 것들 정리'];
+function AskView({db,setDb,st,set,toast,onOpenNote}){
+  const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const [q,setQ]=React.useState(st.askQ||'');const [busy,setBusy]=React.useState(false);
+  const a=st.answer||null;
+  const run=async(text)=>{const query=(text!==undefined?text:q).trim();if(!query||busy)return;
+    setQ(query);setBusy(true);set({askQ:query,answer:null});
+    try{const {text:ans,r}=await wikiAsk(db,query);
+      set({answer:{q:query,text:ans,used:{notes:r.notes,mails:r.mails,events:r.events},at:nowStamp()},
+        askLog:[query,...(st.askLog||[]).filter(x=>x!==query)].slice(0,8)});}
+    catch(e){toast('⚠ '+e.message);}
+    setBusy(false);};
+  const saveNote=()=>{const n=newNote(a.q,'work','# '+a.q+'\n\n'+a.text+'\n\n## 출처\n- 위키 물어보기 · '+todayISO());
+    setDb('notes',[...db.notes,n]);onOpenNote(n.id);toast('노트로 저장');};
+  const used=a?a.used:null;const nUsed=used?used.notes.length+used.mails.length+used.events.length:0;
+  return <Card title="물어보기" badge={<Badge tone="muted">노트 · 메일 · 일정에서 근거를 찾아 답합니다</Badge>}
+    toolbarRight={a&&<><Button variant="gray" size="sm" onClick={saveNote}>답변을 노트로</Button><Button variant="ghost" size="sm" onClick={()=>set({answer:null})}>지우기</Button></>}>
+    <div style={{display:'flex',gap:6,marginBottom:8}}>
+      <TextInput autoFocus value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')run();}}
+        placeholder="예: 9월 기준가격 어떻게 잡았지?" style={{flex:1,fontSize:15,padding:'8px 12px'}}/>
+      <Button icon="🤖" disabled={busy||!q.trim()} onClick={()=>run()}>{busy?'찾는 중…':'물어보기'}</Button>
+    </div>
+    {!a&&!busy&&<>
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+        {ASK_EXAMPLES.map(x=><Chip key={x} onClick={()=>run(x)}>{x}</Chip>)}</div>
+      <InfoBar>검색은 <b>글자</b>를 찾고, 물어보기는 <b>답</b>을 만듭니다. 노트·메일·일정에서 관련 자료를 골라 Claude에게 근거로 주고, 답에는 [[노트]]·(메일: …) 형태의 출처가 붙습니다. 자료에 없으면 없다고 답하게 되어 있습니다.</InfoBar>
+      {(st.askLog||[]).length>0&&<div style={{marginTop:12}}>
+        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>최근 질문</div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>{st.askLog.map(x=><Chip key={x} onClick={()=>run(x)}>{x}</Chip>)}</div></div>}
+    </>}
+    {busy&&<div style={{padding:30,textAlign:'center',color:'var(--text-label)'}}>자료를 찾아 읽는 중…</div>}
+    {a&&<div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 300px',gap:12,alignItems:'start'}}>
+      <div style={{border:'1px solid var(--border-default)',padding:'14px 18px',minWidth:0}}>
+        <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:8}}>❓ {a.q}</div>
+        <Markdown md={a.text} onWiki={t=>{const n=db.notes.find(x=>x.title===t);if(n)onOpenNote(n.id);else toast('그런 노트가 없습니다 · '+t);}}/>
+      </div>
+      <div style={{border:'1px solid var(--border-default)',padding:'10px 12px',fontSize:'var(--fs-sm)'}}>
+        <div style={{fontWeight:600,marginBottom:6}}>📎 근거로 읽은 자료 {nUsed}</div>
+        {used.notes.map(n=><div key={n.id} onClick={()=>onOpenNote(n.id)} style={{padding:'3px 0',cursor:'pointer',color:'var(--color-accent)'}}>📄 {n.title}</div>)}
+        {used.mails.map(m=><div key={m.id} style={{padding:'3px 0',color:'var(--text-muted)'}}>✉ {m.subject}</div>)}
+        {used.events.map(e=><div key={e.id} style={{padding:'3px 0',color:'var(--text-muted)'}}>📅 {e.title}</div>)}
+        {!nUsed&&<div style={{color:'var(--text-label)'}}>없음</div>}
+      </div>
+    </div>}
+  </Card>;
+}
+/* 수집 모달: 원문 여러 건을 한 건씩 제안 → 확인 후 적용 */
+function IngestModal({open,sources,db,setDb,onClose,toast}){
+  const {Modal,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const [i,setI]=React.useState(0);const [busy,setBusy]=React.useState(false);
+  const [p,setP]=React.useState(null);const [err,setErr]=React.useState('');const [done,setDone]=React.useState(0);
+  const work=React.useRef(null);
+  React.useEffect(()=>{if(open){work.current=db.notes.slice();setI(0);setP(null);setErr('');setDone(0);}},[open]);
+  const src=sources&&sources[i];
+  const propose=async()=>{setBusy(true);setErr('');setP(null);
+    try{setP(await wikiIngest(db,work.current,src));}catch(e){setErr(e.message);}setBusy(false);};
+  React.useEffect(()=>{if(open&&src&&!p&&!busy&&!err)propose();},[open,i]);
+  if(!open||!src)return null;
+  const next=()=>{if(i+1<sources.length){setI(i+1);setP(null);setErr('');}else{onClose();toast(done?done+'건을 위키에 수집했습니다':'수집을 끝냈습니다');}};
+  const apply=()=>{
+    let arr=work.current;
+    if(p.id){arr=arr.map(n=>n.id===p.id?{...n,md:p.md,updated:nowStamp()}:n);}
+    else{arr=[...arr,{...newNote(p.target,p.scope,p.md),updated:nowStamp()}];}
+    work.current=arr;setDb('notes',arr);setDone(d=>d+1);next();};
+  const lines=s=>(s||'').split('\n');
+  const beforeL=lines(p&&p.before),afterL=lines(p&&p.md);
+  const bset=new Set(beforeL),aset=new Set(afterL);
+  return <Modal open={open} onClose={onClose} title="🤖 위키에 수집" width={900}
+    footer={<><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{i+1} / {sources.length} · 적용 {done}건</span>
+      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
+        <Button variant="ghost" size="sm" onClick={next}>건너뛰기</Button>
+        <Button variant="gray" size="sm" disabled={busy} onClick={propose}>다시 제안</Button>
+        <Button disabled={!p||busy} onClick={apply}>이대로 적용</Button></span></>}>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:8}}>
+      <Badge tone="muted">{srcLabel(src)}</Badge> <b style={{marginLeft:6}}>{srcTitle(src)}</b></div>
+    {busy&&<div style={{padding:30,textAlign:'center',color:'var(--text-label)'}}>어느 노트에 합칠지 생각하는 중…</div>}
+    {err&&<InfoBar tone="warn">{err}</InfoBar>}
+    {p&&<>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,marginBottom:8}}>
+        <Badge tone={p.isNew?'linked':'muted'}>{p.isNew?'새 노트':'기존 노트에 합침'}</Badge>
+        <b>{p.target}</b><span style={{color:'var(--text-muted)',fontSize:'var(--fs-sm)'}}>{p.why}</span></div>
+      {(()=>{const lost=beforeL.filter(l=>l.trim()&&!aset.has(l)).length;
+        return p.before&&lost>Math.max(3,beforeL.length*0.3)
+          ? <div style={{marginBottom:8}}><InfoBar tone="warn">원래 내용 {lost}줄이 사라집니다 — 지우면 안 되는 내용인지 왼쪽(붉은 줄)에서 확인하세요</InfoBar></div>
+          : null;})()}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,maxHeight:'46vh',overflow:'auto'}}>
+        <div>
+          <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>지금</div>
+          <pre style={{font:'11.5px/1.6 var(--font-mono)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-default)',background:'var(--surface-hover)'}}>
+            {p.before?beforeL.map((l,k)=><div key={k} style={{background:l.trim()&&!aset.has(l)?'var(--color-danger-surface)':'transparent'}}>{l||' '}</div>):<span style={{color:'var(--text-label)'}}>(새로 만드는 노트)</span>}</pre>
+        </div>
+        <div>
+          <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>바뀐 뒤</div>
+          <pre style={{font:'11.5px/1.6 var(--font-mono)',whiteSpace:'pre-wrap',margin:0,padding:'8px 10px',border:'1px solid var(--border-strong)'}}>
+            {afterL.map((l,k)=><div key={k} style={{background:l.trim()&&!bset.has(l)?'var(--wb-yellow-hl)':'transparent'}}>{l||' '}</div>)}</pre>
+        </div>
+      </div>
+    </>}
+  </Modal>;
+}
+/* 점검 화면 */
+function LintView({db,setDb,toast,onOpenNote}){
+  const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const {issues,dup,total}=React.useMemo(()=>wikiLint(db),[db.notes]);
+  const groups={};issues.forEach(x=>{(groups[x.type]=groups[x.type]||[]).push(x);});
+  const upd=(id,patch)=>setDb('notes',db.notes.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
+  const makeNote=(x)=>{const n=newNote(x.link,x.note.scope||'work');setDb('notes',[...db.notes,n]);toast('노트 생성 · '+x.link);};
+  const dropLink=(x)=>upd(x.note.id,{md:removeWikiLink(x.note.md,x.link)});
+  const order=['broken','check','thin','orphan','nosrc','stale'];
+  const none=!issues.length&&!dup.length;
+  return <Card title="점검" badge={<Badge tone={none?'linked':'muted'}>{none?'문제 없음':issues.length+'건'}</Badge>}>
+    <InfoBar>규칙 노트(<b>{RULES_TITLE}</b>)를 기준으로 위키를 훑습니다. 노트 {total}개 · Claude를 쓰지 않는 로컬 점검이라 비용이 들지 않습니다.</InfoBar>
+    {none&&<div style={{padding:30,textAlign:'center',color:'var(--text-label)'}}>깨끗합니다 ✓</div>}
+    {order.filter(k=>groups[k]).map(k=><div key={k} style={{marginTop:14}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+        <b style={{fontSize:'var(--fs-md)'}}>{LINT_KIND[k].label}</b>
+        <Badge tone="muted">{groups[k].length}</Badge>
+        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{LINT_KIND[k].desc}</span></div>
+      {groups[k].map((x,idx)=><div key={k+idx} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 8px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-base)'}}>
+        <span onClick={()=>onOpenNote(x.note.id)} style={{cursor:'pointer',color:'var(--color-accent)',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>📄 {x.note.title}</span>
+        <span style={{color:'var(--text-muted)'}}>{k==='broken'?'[['+x.link+']]':x.label}</span>
+        {k==='broken'&&<><Button variant="gray" size="xs" onClick={()=>makeNote(x)}>노트 만들기</Button>
+          <Button variant="ghost" size="xs" onClick={()=>dropLink(x)}>링크 지우기</Button></>}
+      </div>)}
+    </div>)}
+    {dup.length>0&&<div style={{marginTop:16}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+        <b style={{fontSize:'var(--fs-md)'}}>겹쳐 보이는 노트</b><Badge tone="muted">{dup.length}</Badge>
+        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>같은 개념을 두 곳에 적었을 수 있습니다 — 열어서 확인하고 하나로 합치세요</span></div>
+      {dup.map((d,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'5px 8px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-base)'}}>
+        <span onClick={()=>onOpenNote(d.a.id)} style={{cursor:'pointer',color:'var(--color-accent)'}}>📄 {d.a.title}</span>
+        <span style={{color:'var(--text-label)'}}>↔</span>
+        <span onClick={()=>onOpenNote(d.b.id)} style={{cursor:'pointer',color:'var(--color-accent)'}}>📄 {d.b.title}</span>
+        <span style={{marginLeft:'auto',fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{Math.round(d.sim*100)}% 겹침</span>
+      </div>)}
+    </div>}
+  </Card>;
+}
+Object.assign(window,{RULES_TITLE,RULES_TEMPLATE,getRulesNote,wikiRules,wikiAsk,wikiIngest,wikiLint,
+  wRetrieve,AskView,IngestModal,LintView,srcTitle,srcLabel});
+</script>
 <script type="text/babel">/* 지식 관리: 업무/개인 · 마크다운 편집+미리보기 · 위키링크/백링크 · 그래프 · 검색 · Claude */
 const SCOPES=['work','personal'];
 const SCOPE_LABEL={work:'업무',personal:'개인'};
 const SCOPE_COLOR={work:'#4E82AE',personal:'#0a6b3b'};
 function kbNav(st,set,db){
   const tags=[...new Set(db.notes.flatMap(n=>n.tags||[]))].sort();
-  return [{label:'보기',items:[{id:'notes',num:'①',label:'노트'},{id:'graph',num:'②',label:'그래프'},{id:'search',num:'③',label:'검색'}],value:st.view,onChange:v=>set({view:v})},
+  return [{label:'보기',items:[{id:'notes',num:'①',label:'노트'},{id:'graph',num:'②',label:'그래프'},{id:'ask',num:'③',label:'물어보기'},{id:'search',num:'④',label:'검색'},{id:'lint',num:'⑤',label:'점검'}],value:st.view,onChange:v=>set({view:v})},
     {label:'태그',items:[{id:'',label:'# 전체 · '+db.notes.length},...tags.map(t=>({id:t,label:'# '+t+' · '+db.notes.filter(n=>(n.tags||[]).includes(t)).length}))],value:st.tag||'',onChange:v=>set({tag:v,view:'notes'})}];
 }
 const NOTE_TEMPLATE=t=>'# '+t+'\n\n한 줄 정의: \n\n## 핵심\n- \n\n## 관련\n- [[홈]]\n\n## 출처\n- \n';
@@ -36742,6 +37032,9 @@ function KnowledgeView({db,setDb,st,set,toast}){
   const picked=st.picked||[];
   const upd=(id,patch)=>setDb('notes',notes.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
   const openByTitle=t=>{const n=notes.find(x=>x.title===t);if(n){set({sel:n.id,view:'notes'});return;}const nn=newNote(t,cur?cur.scope:'work');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes'});toast('새 노트 생성 · '+t);};
+  /* 규칙 노트 — 없으면 기본 규칙으로 만들어 연다 */
+  const openRules=()=>{const r=getRulesNote(db);if(r){set({sel:r.id,view:'notes'});return;}
+    const nn=newNote(RULES_TITLE,'work',RULES_TEMPLATE,['규칙']);setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes'});toast('규칙 노트를 만들었습니다');};
   const create=()=>{const nn=newNote('제목 없음',scopes.work?'work':'personal');setDb('notes',[...notes,nn]);set({sel:nn.id,view:'notes',mode:'edit'});};
   const backlinks=cur?notes.filter(n=>n.id!==cur.id&&wikiLinks(n.md).includes(cur.title)):[];
   const exportMd=()=>{if(!cur)return;const blob=new Blob([cur.md],{type:'text/markdown'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=cur.title.replace(/[\\/:*?"<>|]/g,'_')+'.md';a.click();};
@@ -36782,12 +37075,14 @@ function KnowledgeView({db,setDb,st,set,toast}){
       toolbarRight={<ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>}>
       <GraphView notes={visible} sel={st.sel} onPick={id=>set({sel:id})} onOpen={id=>set({sel:id,view:'notes'})} onLink={linkNotes} onUnlink={unlinkNotes} onWiki={openByTitle}/>
     </Card>;
+  if(st.view==='ask')return <AskView db={db} setDb={setDb} st={st} set={set} toast={toast} onOpenNote={id=>set({sel:id,view:'notes'})}/>;
+  if(st.view==='lint')return <LintView db={db} setDb={setDb} toast={toast} onOpenNote={id=>set({sel:id,view:'notes'})}/>;
   if(st.view==='search')return <SearchView notes={notes} onPick={id=>set({sel:id,view:'notes'})} onWiki={openByTitle}/>;
   const mode=st.mode||'split';
   return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
     toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>document.getElementById('mdImport').click()}>.md 가져오기</Button><input id="mdImport" type="file" accept=".md,.txt" multiple style={{display:'none'}} onChange={e=>importMd([...e.target.files])}/>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span></>}
-    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📥" onClick={exportAll}>전체</Button></>}>
+    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📥" onClick={exportAll}>전체</Button></>}>
     {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
       <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
       <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
@@ -36804,6 +37099,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
       <Splitter onDrag={dx=>setLw(w=>Math.max(170,Math.min(600,w+dx)))} onReset={resetLw}/>
       {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>노트를 선택하거나 새로 만드세요</div>:<NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{setDb('notes',notes.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/>}
     </div>
+    <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null})}/>
   </Card>;
 }
 function NoteRow({n,on,picked,onPick,onClick}){const [h,setH]=React.useState(false);const sc=n.scope||'work';
@@ -37152,7 +37448,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v2.4';
+const APP_VERSION='v2.5';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
