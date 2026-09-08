@@ -35957,9 +35957,10 @@ Store.transcribe=async function(blob,opt={}){
     if(mode==='edge'){
       const audio=await blobB64(blob);
       const dia=model==='gpt-4o-transcribe-diarize';
+      const lang=(opt.language||'ko')==='auto'?'':(opt.language||'ko');   /* 자동 감지면 언어를 아예 지정하지 않는다 */
       const {data,error}=await this.sb.functions.invoke('transcribe',
         {body:{audio,mime:blob.type||'audio/webm',name:(opt.name||'audio')+'.'+((blob.type||'').includes('wav')?'wav':'webm'),
-          language:opt.language||'ko',model,prompt:opt.prompt||'',keywords:Store.cfg.sttHint||'',response_format:dia?'json':'text'}});
+          language:lang,model,prompt:opt.prompt||'',keywords:Store.cfg.sttHint||'',response_format:dia?'json':'text'}});
       if(error){let d='';try{const j=await error.context?.json();d=j&&j.error;}catch(_){}throw new Error(d||error.message);}
       if(data&&data.error)throw new Error(data.error);
       return dia&&data.json?diarizeText(data.json):data.text;
@@ -35969,7 +35970,7 @@ Store.transcribe=async function(blob,opt={}){
       const fd=new FormData();
       fd.append('file',blob,(opt.name||'audio')+'.'+((blob.type||'').includes('wav')?'wav':'webm'));
       fd.append('model',model);fd.append('response_format',dia?'json':'text');
-      if(opt.language)fd.append(isNew?'languages':'language',opt.language);
+      if(opt.language&&opt.language!=='auto')fd.append(isNew?'languages':'language',opt.language);
       if(isNew&&Store.cfg.sttHint)fd.append('keywords',String(Store.cfg.sttHint).slice(0,500));
       if(opt.prompt)fd.append('prompt',opt.prompt.slice(0,1200));
       const r=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+Store.cfg.openaiKey},body:fd});
@@ -36464,7 +36465,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.0'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v3.1'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36578,7 +36579,7 @@ function SttTab({c,setC}){
     {via==='direct'&&<Field label="OpenAI API 키"><TextInput type="password" value={c.openaiKey||''} onChange={e=>setC({...c,openaiKey:e.target.value})} placeholder="sk-..."/></Field>}
     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
       <Field label="전사 모델"><Select options={STT_MODELS} value={c.sttModel||'gpt-transcribe'} onChange={v=>setC({...c,sttModel:v})} style={{width:'100%'}}/></Field>
-      <Field label="말하는 언어"><Select options={[{id:'ko',label:'한국어'},{id:'en',label:'영어'},{id:'zh',label:'중국어'},{id:'ja',label:'일본어'},{id:'',label:'자동 감지'}]} value={c.sttLang||'ko'} onChange={v=>setC({...c,sttLang:v})} style={{width:'100%'}}/></Field>
+      <Field label="말하는 언어"><Select options={[{id:'ko',label:'한국어'},{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'auto',label:'자동 감지 (섞여 있을 때)'}]} value={c.sttLang||'ko'} onChange={v=>setC({...c,sttLang:v})} style={{width:'100%'}}/></Field>
     </div>
     <Field label="용어 힌트 (사람 이름 · 제품명 · 사내 용어를 쉼표로)">
       <TextInput value={c.sttHint||''} onChange={e=>setC({...c,sttHint:e.target.value})} placeholder="예: 온산, MOPJ, 에틸렌, 张伟, 华东공장"/>
@@ -37718,9 +37719,11 @@ function KnowledgeView({db,setDb,st,set,toast}){
     const [main,raw]=splitRaw(cur.md);const src=main; /* 이미 정돈된 노트면 원문 섹션은 건드리지 않고 본문만 다시 정돈 */
     if(kind==='polish'){ /* 받아쓴 글을 사람이 읽을 수 있게 — 교정 + 필요하면 한국어로 */
       try{
-        const m=/##\s*녹취[^\n]*\n([\s\S]*?)(?=\n##\s|$)/.exec(cur.md);
-        const raw=(m&&m[1]||'').trim();
-        if(!raw)throw new Error('다듬을 녹취가 없습니다 — 먼저 🎧 전사를 하세요');
+        /* 「## 녹취」가 있으면 그 부분만, 없으면 노트 본문 전체(첨부 줄은 빼고) */
+        const m=/##\s*녹취[^\n]*\n([\s\S]*?)(?=\n##\s*(?!녹취)|$)/.exec(cur.md);
+        const raw=(m?m[1]:splitRaw(cur.md)[0].replace(/^#\s+.*$/m,''))
+          .replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'').trim();
+        if(raw.length<20)throw new Error('정리할 글이 없습니다 — 먼저 🎧 전사를 하거나 본문에 글을 넣으세요');
         toast('녹취를 다듬는 중…');
         const hint=Store.cfg.sttHint?('\n\n자주 나오는 고유명사: '+Store.cfg.sttHint):'';
         const txt=await askClaude(
@@ -37728,12 +37731,12 @@ function KnowledgeView({db,setDb,st,set,toast}){
           +'1) 잘못 들린 낱말·고유명사를 문맥에 맞게 바로잡고, 군더더기(음, 어)와 반복을 없앤다\n'
           +'2) 말한 순서와 내용은 절대 바꾸지 않는다. 없는 내용을 지어내지 않는다\n'
           +'3) 주제가 바뀌는 곳마다 문단을 나누고, 정해진 것·할 일은 문단 끝에 「→ 」로 적는다\n'
-          +'4) 원문이 한국어가 아니면 정리한 원문 아래에 「### 한국어 번역」을 만들어 번역을 붙인다\n'
+          +'4) 원문이 한국어가 아니면 「### 한국어 번역」 절을 만들어 전체를 한국어로 옮긴다. 이때 중국어 인명·지명·회사명은 한자와 한글 음을 함께 적는다(예: 张伟(장웨이))\n'
           +'5) 맨 위에 「### 요점」으로 3~5줄 요약을 먼저 쓴다\n'
           +'6) 확실하지 않은 부분은 (?) 로 표시한다'+hint
           +'\n\n--- 받아쓴 글 ---\n'+raw.slice(0,40000),
           {max_tokens:4000});
-        upd(cur.id,{md:cur.md+'\n\n## 녹취 정리 (Claude)\n'+txt.trim()+'\n'});
+        upd(cur.id,{md:cur.md+'\n\n## 정리·번역 (Claude)\n'+txt.trim()+'\n'});
         toast('정리 완료 — 위키에 수집하면 물어보기의 근거가 됩니다');
       }catch(e){toast('⚠ '+e.message);}
       set({aiBusy:false});return;
@@ -37805,7 +37808,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
   return <Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
     toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button>
       <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span></>}
-    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy||!audioRefs(cur&&cur.md).length} onClick={()=>ai('stt')} title="이 노트에 붙은 녹음을 글로 옮깁니다">전사</Button><Button variant="secondary" size="sm" icon="🈯" disabled={!cur||st.aiBusy||!/##\s*녹취/.test(cur&&cur.md||'')} onClick={()=>ai('polish')} title="녹취의 오탈자·고유명사를 바로잡고, 외국어면 한국어 번역을 붙입니다">녹취 다듬기</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
+    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('summary')}>요약</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="이 노트를 위키 형식으로 정돈하고 원문은 하단에 접어서 보존">위키 정돈</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('tags')}>태그 추천</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy||!audioRefs(cur&&cur.md).length} onClick={()=>ai('stt')} title="이 노트에 붙은 녹음을 글로 옮깁니다">전사</Button><Button variant="secondary" size="sm" icon="🈯" disabled={!cur||st.aiBusy} onClick={()=>ai('polish')} title="받아쓴 글의 오탈자·고유명사를 바로잡고 문단을 나눕니다. 외국어면 한국어 번역과 요점을 붙입니다">정리·번역</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy||!pmsRefs(cur&&cur.md).some(r=>r.img)} onClick={()=>ai('vision')} title="노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다">이미지 읽기</Button><Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>set({ingest:[{kind:'note',item:cur}]})} title="이 노트의 내용을 알맞은 개념 노트에 합칩니다">위키에 수집</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
     {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
       <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
       <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
@@ -38197,7 +38200,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v3.0';
+const APP_VERSION='v3.1';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
