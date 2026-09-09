@@ -36300,6 +36300,8 @@ const MailFolder={
   async handle(){try{return await idbGet(MAILDIR_KEY);}catch(_){return null;}},
   async name(){const h=await this.handle();return h?h.name:'';},
   async forget(){await idbPut(MAILDIR_KEY,null);localStorage.removeItem(MAILDONE_KEY);},
+  /* 폴더 연결은 그대로 두고 "이미 읽음" 기록만 지운다 — 폴더에 남은 .eml 을 처음부터 다시 읽는다 */
+  reread(){const n=this.done().size;localStorage.removeItem(MAILDONE_KEY);return n;},
   /* ask=true 일 때만 권한 창을 띄운다(자동 실행 중에는 조용히 실패해야 한다) */
   async ready(ask){
     const h=await this.handle();if(!h)return null;
@@ -36525,9 +36527,10 @@ const Gmail={
     .replace(/&#(\d+);/g,(m,d)=>{try{return String.fromCodePoint(+d);}catch(_){return '';}})
     .replace(/&#x([0-9a-f]+);/gi,(m,d)=>{try{return String.fromCodePoint(parseInt(d,16));}catch(_){return '';}})
     .replace(/[ \t]+\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim();},
-  bodyOf(payload){let plain='',html='';const walk=p=>{if(!p)return;if(p.parts)p.parts.forEach(walk);const d=p.body&&p.body.data;if(!d)return;if(p.mimeType==='text/plain'&&!plain)plain=this.b64urlBytes(d);else if(p.mimeType==='text/html'&&!html)html=this.b64urlBytes(d);};walk(payload);return plain||this.stripHtml(html)||'';},
+  partsOf(payload){let plain='',html='';const walk=p=>{if(!p)return;if(p.parts)p.parts.forEach(walk);const d=p.body&&p.body.data;if(!d)return;if(p.mimeType==='text/plain'&&!plain)plain=this.b64urlBytes(d);else if(p.mimeType==='text/html'&&!html)html=this.b64urlBytes(d);};walk(payload);return {plain,html};},
+  bodyOf(payload){const {plain,html}=this.partsOf(payload);return plain||this.stripHtml(html)||'';},
   toMail(msg,acc){const H={};(msg.payload.headers||[]).forEach(h=>H[h.name.toLowerCase()]=h.value);const labels=msg.labelIds||[];const d=new Date(H.date||Number(msg.internalDate));
-    return {id:'g:'+msg.id,gid:msg.id,acc,folder:labels.includes('SENT')?'sent':labels.includes('DRAFT')?'draft':'inbox',from:H.from||'',to:H.to||'',cc:H.cc||'',subject:H.subject||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:this.bodyOf(msg.payload).slice(0,20000),star:labels.includes('STARRED'),read:!labels.includes('UNREAD'),tags:[],attachments:(function(){const a=[];const w=p=>{if(!p)return;
+    return {id:'g:'+msg.id,gid:msg.id,acc,folder:labels.includes('SENT')?'sent':labels.includes('DRAFT')?'draft':'inbox',from:H.from||'',to:H.to||'',cc:H.cc||'',subject:H.subject||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:this.bodyOf(msg.payload).slice(0,20000),html:(window.sanitizeHtml?sanitizeHtml(this.partsOf(msg.payload).html):''),star:labels.includes('STARRED'),read:!labels.includes('UNREAD'),tags:[],attachments:(function(){const a=[];const w=p=>{if(!p)return;
       if(p.filename&&p.body&&p.body.attachmentId)a.push({name:p.filename,mime:p.mimeType||'',size:p.body.size||0,gid:msg.id,aid:p.body.attachmentId});
       (p.parts||[]).forEach(w);};w(msg.payload);return a;})()};},
 
@@ -36619,7 +36622,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.7'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.9'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36732,6 +36735,7 @@ function MailFolderSection({onToast}){
       <Button variant="classic" size="sm" icon="📁" onClick={pick}>{name?'폴더 바꾸기':'폴더 고르기'}</Button>
       {name&&<Badge tone={st==='granted'?'linked':'muted'}>{name}{st==='granted'?' · 읽기 허용':' · 권한 필요'}</Badge>}
       {name&&st!=='granted'&&<Button variant="gray" size="sm" onClick={allow}>권한 다시 주기</Button>}
+      {name&&<Button variant="gray" size="sm" onClick={()=>{const n=MailFolder.reread();onToast&&onToast(n?'읽은 기록 '+n+'건 지움 — 다음 동기화에 폴더를 처음부터 다시 읽습니다':'지울 기록 없음');}} title="폴더에 남아 있는 .eml 을 처음부터 다시 가져옵니다">↻ 다시 읽기</Button>}
       {name&&<Button variant="ghost" size="sm" onClick={forget}>연결 해제</Button>}
     </div>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:6,lineHeight:1.55}}>
@@ -36923,7 +36927,7 @@ function parseEml(text){const hdrEnd=text.search(/\r?\n\r?\n/);const hdr=hdrEnd<
   /* 한글 "보낸 사람/제목" 붙여넣기 형식도 지원 */
   const kg=k=>{const m=new RegExp('^(?:'+k+')\\s*:\\s*(.*)$','mi').exec(hdr);return m?m[1].trim():'';};
   const dt=g('date')||kg('날짜|보낸 날짜');const d=new Date(dt);
-  return {from:g('from')||kg('보낸 사람'),to:g('to')||kg('받는 사람'),cc:g('cc')||kg('참조'),subject:g('subject')||kg('제목')||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:tidyBody(body),attachments:out.attachments};}
+  return {from:g('from')||kg('보낸 사람'),to:g('to')||kg('받는 사람'),cc:g('cc')||kg('참조'),subject:g('subject')||kg('제목')||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:tidyBody(body),html:sanitizeHtml(out.html),attachments:out.attachments};}
 
 /* ---------- Outlook .msg ---------- */
 /* RTF → 텍스트. Outlook의 "fromhtml" RTF(HTML을 RTF로 감싼 것)와 일반 RTF 모두 처리. \'xx 바이트는 코드페이지로 디코드 */
@@ -36990,6 +36994,94 @@ function msgAttachments(buf,d){
     const name=a.fileName||a.fileNameShort;let bytes=null;
     try{const c=reader&&reader.getAttachment(i);if(c&&c.content)bytes=c.content;}catch(_){}
     return {name,mime:a.attachMimeTag||'',size:bytes?bytes.length:(a.attachmentSize||0),bytes};});}
+/* ---------- 메일 서식(HTML) ----------
+   메일 HTML을 그대로 그리면 위험하다(스크립트·추적). 쓸 태그만 남기고 나머지는 걷어낸다.
+   그림은 기본으로 막아 두고(보낸 쪽에 열람 사실이 새는 걸 막는다) 눌러야 보이게 한다 */
+const OK_TAG=new Set(['a','b','strong','i','em','u','s','strike','p','br','div','span','ul','ol','li','dl','dt','dd',
+  'table','thead','tbody','tfoot','tr','td','th','caption','col','colgroup','h1','h2','h3','h4','h5','h6',
+  'blockquote','pre','code','hr','img','font','center','small','sup','sub','abbr','label']);
+const KILL_TAG=new Set(['script','style','head','title','link','meta','iframe','object','embed','form','input',
+  'button','select','textarea','base','svg','math','xml','o:p','w:sdt']);
+const OK_ATTR=new Set(['href','title','alt','width','height','align','valign','colspan','rowspan','border',
+  'cellpadding','cellspacing','bgcolor','color','face','size','style','start','type']);
+function sanitizeHtml(html){
+  const src=String(html||'');if(!src.trim())return '';
+  let doc;try{doc=new DOMParser().parseFromString(src,'text/html');}catch(_){return '';}
+  const body=doc&&doc.body;if(!body)return '';
+  /* 주석(조건부 주석 포함) 제거 */
+  const it=doc.createTreeWalker(body,NodeFilter.SHOW_COMMENT,null);
+  const cs=[];while(it.nextNode())cs.push(it.currentNode);cs.forEach(c=>c.remove());
+  const walk=el=>{
+    [...el.children].forEach(c=>{
+      const t=(c.tagName||'').toLowerCase();
+      if(KILL_TAG.has(t)||t.includes(':')){c.remove();return;}
+      if(!OK_TAG.has(t)){ /* 모르는 태그는 껍데기만 벗기고 내용은 살린다 */
+        const f=doc.createDocumentFragment();while(c.firstChild)f.appendChild(c.firstChild);
+        c.replaceWith(f);return;}
+      [...c.attributes].forEach(a=>{
+        const n=a.name.toLowerCase(),v=String(a.value||'').trim();
+        if(n.startsWith('on')){c.removeAttribute(a.name);return;}
+        if(t==='img'&&n==='src'){c.removeAttribute('src');
+          if(/^https?:/i.test(v))c.setAttribute('data-src',v);return;}
+        if(!OK_ATTR.has(n)){c.removeAttribute(a.name);return;}
+        if(n==='href'){
+          if(!/^(https?:|mailto:|tel:|#)/i.test(v))c.removeAttribute('href');
+          else{c.setAttribute('target','_blank');c.setAttribute('rel','noopener noreferrer');}}
+        if(n==='style'&&/expression\(|javascript:|position\s*:\s*(fixed|absolute)|@import/i.test(v))c.removeAttribute('style');
+      });
+      walk(c);
+    });
+  };
+  walk(body);
+  return body.innerHTML.slice(0,150000);
+}
+const MAIL_CSS=`.pms-html{font:var(--fs-md2)/1.6 var(--font-sans);color:var(--text-body);overflow-x:auto}
+.pms-html img{max-width:100%;height:auto}
+.pms-html table{border-collapse:collapse;max-width:100%}
+.pms-html td,.pms-html th{padding:3px 6px;vertical-align:top}
+.pms-html a{color:var(--color-accent)}
+.pms-html blockquote{margin:6px 0 6px 10px;padding-left:10px;border-left:2px solid var(--border-strong);color:var(--text-muted)}
+.pms-html p{margin:6px 0}
+.pms-html *{max-width:100%!important}`;
+/* 글자 본문에서 주소를 눌러 열 수 있게 */
+const URL_RE=/(https?:\/\/[^\s<>"')\]]+)/g;
+function TextBody({text}){
+  const parts=String(text||'').split(URL_RE);
+  return <div style={{whiteSpace:'pre-wrap',fontSize:'var(--fs-md2)',lineHeight:1.65,color:'var(--text-body)',wordBreak:'break-word'}}>
+    {parts.map((p,i)=>URL_RE.test(p)&&i%2===1
+      ? <a key={i} href={p} target="_blank" rel="noopener noreferrer" style={{color:'var(--color-accent)'}}>{p}</a>
+      : <React.Fragment key={i}>{p}</React.Fragment>)}
+  </div>;
+}
+function MailBody({mail}){
+  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const [mode,setMode]=React.useState('html');const [imgOn,setImgOn]=React.useState(false);
+  const ref=React.useRef(null);
+  const html=mail.html||'';
+  React.useEffect(()=>{setMode('html');setImgOn(false);},[mail.id]);
+  React.useEffect(()=>{
+    const el=ref.current;if(!el||!html||mode!=='html')return;
+    el.innerHTML=html;
+    if(imgOn)el.querySelectorAll('img[data-src]').forEach(i=>{i.src=i.getAttribute('data-src');});
+  },[html,mode,imgOn,mail.id]);
+  const imgN=(html.match(/data-src=/g)||[]).length;
+  if(!html)return <TextBody text={mail.body}/>;
+  return <>
+    <style>{MAIL_CSS}</style>
+    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+      <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
+        {[['html','서식'],['text','글자']].map(([k,l])=><button key={k} type="button" onClick={()=>setMode(k)}
+          style={{border:'none',borderRadius:4,padding:'2px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,
+            background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}
+      </span>
+      {mode==='html'&&imgN>0&&!imgOn&&<>
+        <Button variant="gray" size="xs" onClick={()=>setImgOn(true)}>🖼 그림 {imgN}개 표시</Button>
+        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>보낸 쪽에 열람 사실이 알려질 수 있어 기본으로 막아 둡니다</span>
+      </>}
+    </div>
+    {mode==='html'?<div ref={ref} className="pms-html"/>:<TextBody text={mail.body}/>}
+  </>;
+}
 /* ---------- 본문 다듬기 ----------
    Outlook 이 HTML 로 저장할 때 앞에 붙이는 머리말 표와 Word 설정 찌꺼기를 걷어낸다 */
 const JUNK=/^(0|\d{1,3}|false|true|EN-US|KO|X-NONE|MicrosoftInternetExplorer4|Normal|Clean|Custom|None|Yes|No)$/i;
@@ -37103,10 +37195,14 @@ function AttachBar({mail,toast}){
 }
 function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,openSettings}){
   const {Card,Button,Badge,InfoBar,Modal,DropZone}=window.HDWorkbookDesignSystem_ad60e4;
-  const [q,setQ]=React.useState('');
+  const [q,setQ]=React.useState('');const [sf,setSf]=React.useState('all');
+  const SFIELDS=[{id:'all',label:'전체'},{id:'subject',label:'제목'},{id:'from',label:'보낸사람'},{id:'to',label:'받는사람'},{id:'body',label:'본문'}];
+  const hit=(m,t)=>{const v=sf==='subject'?m.subject:sf==='from'?m.from:sf==='to'?(m.to||'')+' '+(m.cc||''):sf==='body'?m.body
+    :[m.subject,m.from,m.to,m.cc,m.body].join(' ');
+    return String(v||'').toLowerCase().includes(t);};
   const upd=(id,patch)=>setDb('mails',arr=>arr.map(m=>m.id===id?{...m,...patch}:m));
-  const list=db.mails.filter(m=>(st.acc==='all'||m.acc===st.acc)&&(st.folder==='starred'?m.star:m.folder===st.folder)&&(!q||(m.subject+m.from+m.body).toLowerCase().includes(q.toLowerCase()))).sort((a,b)=>b.date.localeCompare(a.date));
-  const cur=db.mails.find(m=>m.id===st.sel);
+  const list=db.mails.filter(m=>(st.acc==='all'||m.acc===st.acc)&&(st.folder==='starred'?m.star:m.folder===st.folder)&&(!q||hit(m,q.toLowerCase().trim()))).sort((a,b)=>b.date.localeCompare(a.date));
+  const cur=list.find(m=>m.id===st.sel);   /* 검색으로 걸러지면 읽기 칸도 비운다 */
   const accOf=id=>db.accounts.find(a=>a.id===id)||{};
   const title=(st.acc==='all'?'전체':accOf(st.acc).label)+' ▸ '+FOLDERS.find(f=>f.id===st.folder).label;
   const open=m=>{set({sel:m.id});if(!m.read)upd(m.id,{read:true});};
@@ -37204,7 +37300,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={async()=>{const n=await pullFolder(true);if(n)toast(n+"건 가져옴");}}>폴더</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
         if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
         set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
-      toolbarRight={<><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·보낸 사람·본문" style={{width:220,padding:'4px 8px'}}/><Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
+      toolbarRight={<><Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}<Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
       {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)',flexWrap:'wrap'}}>
         <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>건 선택
         <Button variant="gray" size="xs" onClick={()=>bulk({read:true},'읽음 처리')}>✓ 읽음</Button>
@@ -37244,7 +37340,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
               <span style={{color:'var(--text-label)'}}>날짜</span><span>{fmtDT(cur.date)} · <Badge tone="blue" style={{fontSize:10}}>{accOf(cur.acc).label}</Badge></span>
             </div>
             <AttachBar mail={cur} toast={toast}/>
-            <div style={{whiteSpace:'pre-wrap',fontSize:'var(--fs-md2)',lineHeight:1.65,color:'var(--text-body)'}}>{cur.body}</div>
+            <MailBody mail={cur}/>
           </>}
         </div>
       </div>
@@ -37351,7 +37447,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,tidyBody,mailKey,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -38824,7 +38920,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v4.7';
+const APP_VERSION='v4.9';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
