@@ -36124,7 +36124,29 @@ const STATUS_LABEL={todo:'예정',doing:'진행중',done:'완료'};
 const STATUS_KEYS=['todo','doing','done'];
 const PRI_LABEL={high:'높음',mid:'보통',low:'낮음'};
 const fmtDT=iso=>{const d=new Date(iso);return isNaN(d)?iso:d.getMonth()+1+'/'+d.getDate()+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());};
-Object.assign(window,{useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
+function usePaneSize(key,def){
+  const [v,setV]=React.useState(()=>{const s=parseFloat(localStorage.getItem('pms.pane.'+key));return isFinite(s)?s:def;});
+  React.useEffect(()=>{try{localStorage.setItem('pms.pane.'+key,String(v));}catch(_){}},[key,v]);
+  return [v,setV,()=>setV(def)];
+}
+/* 좌우 폭 조절 손잡이. 드래그하면 onDrag(이동한 px), 더블클릭하면 onReset
+   컴포넌트는 반드시 파일 최상위에 — 안쪽에 정의하면 렌더마다 재마운트되어 드래그가 끊긴다 */
+function Splitter({onDrag,onReset}){
+  const [hot,setHot]=React.useState(false);
+  const down=e=>{e.preventDefault();let last=e.clientX;
+    const mv=ev=>{const dx=ev.clientX-last;last=ev.clientX;if(dx)onDrag(dx);};
+    const up=()=>{window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);
+      document.body.style.cursor='';document.body.style.userSelect='';setHot(false);};
+    window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
+    document.body.style.cursor='col-resize';document.body.style.userSelect='none';setHot(true);};
+  return <div onMouseDown={down} onDoubleClick={onReset} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)}
+    title="드래그해서 폭 조절 · 더블클릭하면 기본 폭"
+    style={{width:5,cursor:'col-resize',position:'relative',flex:'0 0 5px',background:'transparent',alignSelf:'stretch',minHeight:24}}>
+    <div style={{position:'absolute',top:0,bottom:0,left:hot?1:2,width:hot?3:1,background:hot?'var(--color-accent)':'var(--border-default)'}}/>
+  </div>;
+}
+
+Object.assign(window,{usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
 </script>
 <script type="text/babel">/* ── 첨부 파일(이미지·PDF) ─────────────────────────────────────────
    클라우드 모드 → Supabase Storage 버킷 'pms-files' (비공개, 본인 폴더만 접근)
@@ -37236,6 +37258,7 @@ function AttachBar({mail,toast}){
 function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,openSettings}){
   const {Card,Button,Badge,InfoBar,Modal,DropZone}=window.HDWorkbookDesignSystem_ad60e4;
   const mobile=useMobile();
+  const [lw,setLw,resetLw]=usePaneSize('mailList',360);   /* 목록 열 폭 — 손잡이를 끌어 조절 */
   const [q,setQ]=React.useState('');const [sf,setSf]=React.useState('all');
   const SFIELDS=[{id:'all',label:'전체'},{id:'subject',label:'제목'},{id:'from',label:'보낸사람'},{id:'to',label:'받는사람'},{id:'body',label:'본문'}];
   const hit=(m,t)=>{const v=sf==='subject'?m.subject:sf==='from'?m.from:sf==='to'?(m.to||'')+' '+(m.cc||''):sf==='body'?m.body
@@ -37276,9 +37299,9 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     setBusy('');};
   /* 회사 메일 폴더(PC 스크립트가 떨군 .eml)에서 가져오기 */
   const folderAcc=()=>{const a=db.accounts.find(x=>x.id===(Store.cfg.mailFolderAcc||'work'))||db.accounts[0];return a?a.id:'work';};
-  const pullFolder=async(ask)=>{
+  const pullFolder=async(ask,max)=>{
     let files;
-    try{files=await MailFolder.scan(ask,40);}catch(e){if(ask)toast('⚠ '+e.message);return 0;}
+    try{files=await MailFolder.scan(ask,max||40);}catch(e){if(ask)toast('⚠ '+e.message);return 0;}
     if(files===null){if(ask)toast('폴더 권한이 필요합니다 — 설정 › 메일 연동에서 폴더를 다시 고르세요');return 0;}
     if(!files.length){if(ask)toast('새 파일 없음');return 0;}
     const items=[],names=[];
@@ -37338,7 +37361,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={async()=>{const n=await pullFolder(true);if(n)toast(n+"건 가져옴");}}>폴더</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={async()=>{let tot=0;for(let i=0;i<40;i++){const n=await pullFolder(i===0,200);if(!n)break;tot+=n;toast('가져오는 중… '+tot+'건');}toast(tot?tot+'건 가져옴':'새 파일 없음');}}>폴더</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
         if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
         set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
       toolbarRight={<>{!mobile&&<Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/>}<TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:mobile?150:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}<Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
@@ -37359,14 +37382,15 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
         <Button variant="secondary" size="xs" onClick={()=>set({ingest:db.mails.filter(m=>picked.includes(m.id)).map(m=>({kind:'mail',item:m}))})} title="선택한 메일을 개념 노트에 합칩니다">🤖 위키에 수집</Button>
         <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
         <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
-      <div style={{display:'grid',gridTemplateColumns:mobile?'minmax(0,1fr)':'minmax(280px,360px) minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:mobile?'auto':'calc(100vh - 260px)'}}>
-        <div style={{display:mobile&&cur?'none':'block',borderRight:mobile?'none':'1px solid var(--border-default)',overflowY:'auto',maxHeight:mobile?'none':'calc(100vh - 262px)'}}>
+      <div style={{display:'grid',gridTemplateColumns:mobile?'minmax(0,1fr)':lw+'px 5px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:mobile?'auto':'calc(100vh - 260px)'}}>
+        <div style={{display:mobile&&cur?'none':'block',borderRight:mobile?'none':'1px solid var(--border-default)',overflowY:'auto',minWidth:0,maxHeight:mobile?'none':'calc(100vh - 262px)'}}>
           <label style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-label)',background:'var(--surface-hover)',cursor:'pointer',position:'sticky',top:0,zIndex:2}}>
             <input type="checkbox" checked={list.length>0&&list.every(m=>picked.includes(m.id))} onChange={()=>set({picked:list.every(m=>picked.includes(m.id))?[]:list.map(m=>m.id)})}/>전체 선택</label>
           {list.length===0&&<div style={{padding:24,color:'var(--text-label)',textAlign:'center',fontSize:'var(--fs-base)'}}>메일 없음</div>}
           {list.map(m=><MailRow key={m.id} m={m} on={m.id===st.sel} picked={picked.includes(m.id)} onPick={()=>togglePick(m.id)} acc={accOf(m.acc)} onClick={()=>open(m)} onStar={e=>{e.stopPropagation();upd(m.id,{star:!m.star});}}/>)}
         </div>
-        <div style={{display:mobile&&!cur?'none':'block',padding:mobile?'10px 12px':'14px 18px',overflowY:'auto',maxHeight:mobile?'none':'calc(100vh - 262px)'}}>
+        {!mobile&&<Splitter onDrag={dx=>setLw(w=>Math.max(220,Math.min(760,w+dx)))} onReset={resetLw}/>}
+        <div style={{display:mobile&&!cur?'none':'block',minWidth:0,padding:mobile?'10px 12px':'14px 18px',overflowY:'auto',maxHeight:mobile?'none':'calc(100vh - 262px)'}}>
           {!cur&&!mobile&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80,fontSize:'var(--fs-base)'}}>메일을 선택하세요</div>}
           {cur&&<>
             {mobile&&<BackBar label={cur.subject} onBack={()=>set({sel:null})}/>}
@@ -38383,27 +38407,6 @@ function removeWikiLink(md,title){
   return out.replace(/\n{3,}/g,'\n\n');
 }
 /* 폭 조절 값은 브라우저에 기억시킨다(계정이 아니라 이 PC 기준) */
-function usePaneSize(key,def){
-  const [v,setV]=React.useState(()=>{const s=parseFloat(localStorage.getItem('pms.pane.'+key));return isFinite(s)?s:def;});
-  React.useEffect(()=>{try{localStorage.setItem('pms.pane.'+key,String(v));}catch(_){}},[key,v]);
-  return [v,setV,()=>setV(def)];
-}
-/* 좌우 폭 조절 손잡이. 드래그하면 onDrag(이동한 px), 더블클릭하면 onReset
-   컴포넌트는 반드시 파일 최상위에 — 안쪽에 정의하면 렌더마다 재마운트되어 드래그가 끊긴다 */
-function Splitter({onDrag,onReset}){
-  const [hot,setHot]=React.useState(false);
-  const down=e=>{e.preventDefault();let last=e.clientX;
-    const mv=ev=>{const dx=ev.clientX-last;last=ev.clientX;if(dx)onDrag(dx);};
-    const up=()=>{window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);
-      document.body.style.cursor='';document.body.style.userSelect='';setHot(false);};
-    window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
-    document.body.style.cursor='col-resize';document.body.style.userSelect='none';setHot(true);};
-  return <div onMouseDown={down} onDoubleClick={onReset} onMouseEnter={()=>setHot(true)} onMouseLeave={()=>setHot(false)}
-    title="드래그해서 폭 조절 · 더블클릭하면 기본 폭"
-    style={{width:5,cursor:'col-resize',position:'relative',flex:'0 0 5px',background:'transparent',alignSelf:'stretch',minHeight:24}}>
-    <div style={{position:'absolute',top:0,bottom:0,left:hot?1:2,width:hot?3:1,background:hot?'var(--color-accent)':'var(--border-default)'}}/>
-  </div>;
-}
 /* 상단 업무/개인 체크박스 */
 function ScopeToggle({scopes,onChange}){
   return <span style={{display:'inline-flex',gap:10,alignItems:'center'}}>
@@ -38972,7 +38975,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.0';
+const APP_VERSION='v5.1';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
