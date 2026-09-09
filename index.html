@@ -36561,7 +36561,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.1'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.2'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -37495,35 +37495,64 @@ async function wikiAsk(db,q){
   return {text,r};
 }
 /* ── 수집: 원문 하나를 어느 개념 노트에 어떻게 합칠지 제안받는다 ── */
+/* 큰따옴표 문자열 안의 진짜 줄바꿈·탭을 이스케이프해 준다 —
+   모델이 마크다운을 JSON 문자열에 넣을 때 자주 날것으로 흘리는데, 그러면 JSON.parse가 실패한다 */
+function fixJSONNewlines(t){
+  let out='',inStr=false,esc=false;
+  for(const ch of t){
+    if(esc){out+=ch;esc=false;continue;}
+    if(ch==='\\'){out+=ch;esc=true;continue;}
+    if(ch==='"'){inStr=!inStr;out+=ch;continue;}
+    if(inStr&&(ch==='\n'||ch==='\r'||ch==='\t')){out+=ch==='\t'?'\\t':ch==='\r'?'':'\\n';continue;}
+    out+=ch;
+  }
+  return out;
+}
 function grabJSON(t){
   const fence=/```(?:json)?\s*([\s\S]*?)```/.exec(t||'');
-  const cands=[fence&&fence[1],(()=>{const a=(t||'').indexOf('{'),b=(t||'').lastIndexOf('}');return a>=0&&b>a?t.slice(a,b+1):null;})()];
-  for(const c of cands){if(!c)continue;try{return JSON.parse(c);}catch(_){}}
+  const body=(()=>{const a=(t||'').indexOf('{'),b=(t||'').lastIndexOf('}');return a>=0&&b>a?t.slice(a,b+1):null;})();
+  const cands=[fence&&fence[1],body];
+  for(const c of cands){if(!c)continue;
+    try{return JSON.parse(c);}catch(_){}
+    try{return JSON.parse(fixJSONNewlines(c));}catch(_){}}
   return null;
 }
+/* 노트 본문에서 첨부 링크와 「원문 메모」 절을 걷어낸다 — 그대로 보내면 길이만 잡아먹고 결과가 잘린다 */
+const leanMd=md=>splitRaw(md||'')[0]
+  .replace(/^\s*!?\[[^\]]*\]\(pms:[^)]*\)\s*$/gm,'')
+  .replace(/\n{3,}/g,'\n\n').trim();
 const srcText=s=>s.kind==='mail'
-  ? '제목: '+s.item.subject+'\n보낸 사람: '+s.item.from+'\n날짜: '+String(s.item.date).slice(0,16).replace('T',' ')+'\n\n'+cut(s.item.body,4000)
+  ? '제목: '+s.item.subject+'\n보낸 사람: '+s.item.from+'\n날짜: '+String(s.item.date).slice(0,16).replace('T',' ')+'\n\n'+cut(s.item.body,2600)
   : s.kind==='event'
-  ? '일정: '+s.item.title+'\n'+s.item.date+(s.item.start?' '+s.item.start:'')+'\n'+cut(s.item.notes||'',2000)
-  : '노트: '+s.item.title+'\n\n'+cut(s.item.md,4000);
+  ? '일정: '+s.item.title+'\n'+s.item.date+(s.item.start?' '+s.item.start:'')+'\n'+cut(s.item.notes||'',1600)
+  : '노트: '+s.item.title+'\n\n'+cut(leanMd(s.item.md),2600);
 const srcTitle=s=>s.kind==='mail'?s.item.subject:s.item.title;
 const srcLabel=s=>s.kind==='mail'?'메일':s.kind==='event'?'일정':'노트';
 async function wikiIngest(db,notes,src){
   const q=srcTitle(src)+' '+(src.kind==='mail'?cut(src.item.body,600):'');
-  const cand=wRetrieve({notes,mails:[],events:[]},q,{notes:5,mails:0,events:0}).notes;
+  const cand=wRetrieve({notes,mails:[],events:[]},q,{notes:3,mails:0,events:0}).notes;
   const titles=notes.filter(n=>n.title!==RULES_TITLE).map(n=>n.title);
   const sys='너는 hong의 개인 업무 위키를 관리한다. 아래 규칙에 맞춰 원문을 개념 노트로 흡수시킨다.\n\n--- 위키 규칙 ---\n'+wikiRules(db);
   const prompt='## 지금 있는 노트 제목\n'+(titles.join(' · ')||'(없음)')
-    +'\n\n## 후보 노트 전문\n'+(cand.length?cand.map(n=>'### '+n.title+'\n'+cut(n.md,1800)).join('\n\n'):'(관련 노트 없음)')
+    +'\n\n## 후보 노트 전문\n'+(cand.length?cand.map(n=>'### '+n.title+'\n'+cut(leanMd(n.md),1300)).join('\n\n'):'(관련 노트 없음)')
     +'\n\n## 흡수할 원문 ('+srcLabel(src)+')\n'+srcText(src)
     +'\n\n원문의 새로운 사실을 가장 알맞은 개념 노트 하나에 합쳐라. 마땅한 노트가 없으면 새로 만든다.'
     +' 기존 내용을 지우지 말고 갱신·추가하며, 원문은 노트 맨 아래 "## 원문 메모" 절에 접어 넣는다.'
     +' 출처는 "## 출처" 절에 한 줄 추가한다.'
-    +'\n\n설명 없이 아래 JSON만 출력한다:\n'
+    +' 원문 메모는 핵심만 남겨 짧게 접는다(원문 전체를 다시 옮겨 적지 말 것).'
+    +'\n\n설명 없이 아래 JSON만 출력한다. md 안의 줄바꿈은 반드시 \\n 으로 적는다:\n'
     +'{"target":"대상 노트 제목","isNew":true 또는 false,"scope":"work" 또는 "personal","why":"무엇을 왜 바꿨는지 한 줄","md":"노트 전체 마크다운(제목 # 부터)"}';
-  const raw=await askClaude(prompt,{system:sys,max_tokens:3000});
-  const j=grabJSON(raw);
-  if(!j||!j.md)throw new Error('제안을 이해하지 못했습니다 — 다시 시도하거나 원문이 너무 긴지 확인하세요');
+  /* 결과가 잘리면(닫는 중괄호 없음) 더 짧게 쓰라고 한 번 더 부탁한다 */
+  const ask=async extra=>{
+    const r=await askClaude(prompt+(extra||''),{system:sys,max_tokens:4000});
+    return {raw:r,j:grabJSON(r)};
+  };
+  let {raw,j}=await ask();
+  if(!j||!j.md)({raw,j}=await ask('\n\n※ 앞서 답이 너무 길어 잘렸다. md 는 2500자 이내로 압축하고, 원문 메모는 3줄 요약으로 줄여라. 오직 JSON 한 덩어리만 출력하라.'));
+  if(!j||!j.md){
+    const why=/\{/.test(raw||'')?'답이 길어서 중간에 잘렸습니다':'JSON 형식이 아닌 답이 왔습니다';
+    throw new Error(why+' — 원문이 긴 노트는 「위키 정돈」으로 먼저 줄인 뒤 수집하면 잘 됩니다');
+  }
   const exist=notes.find(n=>n.title===j.target);
   return {target:j.target||srcTitle(src),isNew:!exist,scope:j.scope||'work',why:j.why||'',md:j.md,before:exist?exist.md:'',id:exist?exist.id:null};
 }
@@ -38010,6 +38039,16 @@ function kbNav(st,set,db){
 const NOTE_TEMPLATE=t=>'# '+t+'\n\n한 줄 정의: \n\n## 핵심\n- \n\n## 관련\n- [[홈]]\n\n## 출처\n- \n';
 const newNote=(title,scope,md,tags)=>({id:uid(),title:title||'제목 없음',scope:scope||'work',tags:tags||[],updated:nowStamp(),md:md||NOTE_TEMPLATE(title||'제목 없음')});
 const RAW_HEAD='## 원문 메모';
+/* 「## 원문 메모」 앞쪽 본문에 절을 넣는다(같은 이름의 절이 있으면 갈아끼움).
+   끝에 그냥 붙이면 원문 메모 뒤로 밀려 위키 정돈이 그 내용을 못 읽는다 */
+function putSection(md,head,body){
+  const [main,raw]=splitRaw(md);
+  const esc=head.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const re=new RegExp('\\n*##\\s*'+esc+'[^\\n]*\\n[\\s\\S]*?(?=\\n##\\s|$)','g');
+  const cleaned=main.replace(re,'').replace(/\s+$/,'');
+  const next=cleaned+'\n\n## '+head+'\n'+String(body).trim()+'\n';
+  return raw?next+'\n'+raw:next;
+}
 const splitRaw=md=>{const i=md.indexOf('\n'+RAW_HEAD);return i<0?[md,'',0]:[md.slice(0,i),md.slice(i+1),md.slice(0,i+1).split('\n').length-1];};
 const MD_HELP=[['# 제목','첫 줄의 # 이 노트 제목이 됨'],['## 소제목','H2 · ### 은 H3'],['- 항목','불릿 목록 · 1. 은 번호 목록'],['- [ ] 할 일','체크박스 · 읽기 모드에서 클릭 토글'],['**굵게** *기울임*','강조'],['`코드`','인라인 코드 · ``` 로 블록'],['> 인용','인용문'],['| 표 | 표 |','2번째 줄에 |---|---| 필요'],['[[노트 제목]]','위키링크 · 없는 노트는 클릭 시 생성'],['[[제목|표시 이름]]','다른 이름으로 표시'],['[텍스트](https://…)','외부 링크']];
 /* 본문에 [[제목]] 추가 — "## 관련" 절이 있으면 그 아래에 */
@@ -38094,8 +38133,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
       toast('글 '+raw.length.toLocaleString()+'자를 '+n+'조각으로 나눠 정리합니다 · 몇 분 걸립니다');
       const out=await polishTranscript(raw,{hint:Store.cfg.sttHint,onStep:t=>toast(t)});
       /* 빈 껍데기 절과 지난번 결과는 걷어내고 새로 붙인다 */
-      const md=mdIn.replace(/\n*##\s*(녹취 정리|정리·번역)[^\n]*\n[\s\S]*?(?=\n##\s|$)/g,'').replace(/\s+$/,'');
-      return md+'\n\n## 정리·번역 (Claude)\n'+out.trim()+'\n';
+      return putSection(mdIn,'정리·번역 (Claude)',out);
     };
     if(kind==='polish'){
       try{
@@ -38116,7 +38154,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
           all+=(all?'\n\n':'')+'### '+nm.replace(/^🎙\s*/,'')+'\n'+txt;
         }
         const eng=Store.cfg.sttEngine==='paraformer'?'Qwen3-ASR':'Whisper';
-        const withRaw=cur.md+'\n\n## 녹취 ('+eng+')\n'+all.trim()+'\n';
+        const withRaw=putSection(cur.md,'녹취 ('+eng+')',all);
         upd(cur.id,{md:withRaw});
         /* 전사가 끝나면 정리·번역까지 이어서 — 받아쓴 그대로는 읽기 어렵다 */
         toast('전사 완료 — 이어서 정리·번역합니다');
@@ -38142,7 +38180,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
           +'- 표는 마크다운 표로 그대로 옮긴다(숫자·단위 정확히)\n- 표가 아니면 핵심을 불릿으로\n'
           +'- 읽기 어려운 글자는 「?」로 표시하고 지어내지 않는다\n- 설명 문장 없이 결과만 출력',
           {images:payload,max_tokens:2200});
-        upd(cur.id,{md:cur.md+'\n\n## 이미지에서 읽은 것 (Claude)\n'+txt.trim()+'\n'});
+        upd(cur.id,{md:putSection(cur.md,'이미지에서 읽은 것 (Claude)',txt)});
         toast('이미지를 읽어 노트에 붙였습니다');
       }catch(e){toast('⚠ '+e.message);}
       set({aiBusy:false});return;
@@ -38341,21 +38379,24 @@ function SearchView({notes,onPick,onWiki}){
    노드 드래그 = 위치 고정 · Shift+노드 드래그 = 연결 · 선 클릭 = 연결 해제
    직접 만든 3차원 힘-방향 배치 + 원근 투영(외부 라이브러리 없음) */
 const G3={
-  color:{work:'#6FB3E8',personal:'#4BC79B'},   /* 어두운 배경에서 잘 보이도록 밝게 */
-  sel:'#FFC24A', focal:760, minDist:340, maxDist:2400,
+  color:{work:'#2C6FA6',personal:'#1C8A66'},   /* 밝은 배경에서 또렷하도록 진하게 */
+  sel:'#C8790C', focal:760, minDist:340, maxDist:2400,
+  ink:'#25313D',                                /* 이름표 글자색 */
 };
 /* 색을 밝게(amt>0) 또는 어둡게(amt<0) */
 function gTint(hex,amt){const n=parseInt(hex.slice(1),16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
   const m=v=>Math.max(0,Math.min(255,Math.round(amt>0?v+(255-v)*amt:v*(1+amt))));
   return 'rgb('+m(r)+','+m(g)+','+m(b)+')';}
+function gHex(rgb){const m=/(\d+),\s*(\d+),\s*(\d+)/.exec(rgb);if(!m)return rgb;
+  return '#'+[1,2,3].map(i=>(+m[i]).toString(16).padStart(2,'0')).join('');}
 function gRgba(hex,a){const n=parseInt(hex.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a.toFixed(3)+')';}
 /* 캔버스 위에 얹는 작은 버튼 */
 function GBtn({on,onClick,title,children}){
   const [h,setH]=React.useState(false);
   return <button type="button" title={title} onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
-    style={{border:'1px solid '+(on?'rgba(255,201,74,.55)':'rgba(255,255,255,.18)'),borderRadius:6,padding:'4px 10px',
-      background:on?'rgba(255,201,74,.16)':h?'rgba(255,255,255,.12)':'rgba(255,255,255,.05)',
-      color:on?'#FFD782':'rgba(226,236,245,.9)',font:'500 11.5px var(--font-sans)',cursor:'pointer',backdropFilter:'blur(6px)'}}>{children}</button>;
+    style={{border:'1px solid '+(on?'rgba(200,121,12,.6)':'rgba(40,55,70,.22)'),borderRadius:6,padding:'4px 10px',
+      background:on?'rgba(200,121,12,.14)':h?'rgba(255,255,255,.95)':'rgba(255,255,255,.7)',
+      color:on?'#8A5300':'rgba(40,55,70,.92)',font:'500 11.5px var(--font-sans)',cursor:'pointer',backdropFilter:'blur(6px)'}}>{children}</button>;
 }
 function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
   const {Button}=window.HDWorkbookDesignSystem_ad60e4;
@@ -38438,12 +38479,12 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
       /* 초점: 고른(또는 가리킨) 노드와 그 이웃만 또렷하게 */
       const focus=HV||SEL;
       const near=new Set();if(focus){near.add(focus);ES.forEach(e=>{if(e.from===focus)near.add(e.to);if(e.to===focus)near.add(e.from);});}
-      const dim=id=>focus&&!near.has(id)?.34:1;
+      const dim=id=>focus&&!near.has(id)?.46:1;
 
       /* ③ 배경 */
       ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cw,ch);
       const bg=ctx.createRadialGradient(cw*.5,ch*.42,20,cw*.5,ch*.42,Math.max(cw,ch)*.78);
-      bg.addColorStop(0,'#16283C');bg.addColorStop(.55,'#0F1C2B');bg.addColorStop(1,'#080E16');
+      bg.addColorStop(0,'#FFFFFF');bg.addColorStop(.55,'#F2F5F8');bg.addColorStop(1,'#E6EBF1');
       ctx.fillStyle=bg;ctx.fillRect(0,0,cw,ch);
 
       /* ④ 간선 — 먼 것부터 */
@@ -38451,12 +38492,12 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
       ctx.lineCap='round';
       el.forEach(({e,a,b})=>{
         const hot=focus&&(e.from===focus||e.to===focus);
-        const al=Math.min(a.a,b.a)*(hot?.95:focus?.12:.42);
+        const al=Math.min(a.a,b.a)*(hot?1:focus?.28:.7);
         const ca=G3.color[(R.current.notes.find(n=>n.id===e.from)||{}).scope||'work'];
         const cb=G3.color[(R.current.notes.find(n=>n.id===e.to)||{}).scope||'work'];
         const g=ctx.createLinearGradient(a.x,a.y,b.x,b.y);
         g.addColorStop(0,gRgba(hot?G3.sel:ca,al));g.addColorStop(1,gRgba(hot?G3.sel:cb,al));
-        ctx.strokeStyle=g;ctx.lineWidth=hot?2:1.1;
+        ctx.strokeStyle=g;ctx.lineWidth=hot?2.4:1.5;
         if(hot){ctx.shadowColor=gRgba(G3.sel,.6);ctx.shadowBlur=8;}
         ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.shadowBlur=0;
         /* 방향 화살표 */
@@ -38481,20 +38522,23 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
         ctx.globalAlpha=a;
         if(on||hv){ctx.shadowColor=gRgba(col,.9);ctx.shadowBlur=16;}
         const g=ctx.createRadialGradient(s.x-r*.38,s.y-r*.42,r*.12,s.x,s.y,r*1.05);
-        g.addColorStop(0,gTint(col,.62));g.addColorStop(.5,col);g.addColorStop(1,gTint(col,-.42));
+        g.addColorStop(0,gTint(col,.42));g.addColorStop(.5,col);g.addColorStop(1,gTint(col,-.34));
         ctx.fillStyle=g;ctx.beginPath();ctx.arc(s.x,s.y,r,0,7);ctx.fill();ctx.shadowBlur=0;
+        ctx.strokeStyle=gRgba(gHex(gTint(col,-.45)),.9);ctx.lineWidth=1;ctx.stroke();
         const p=P.current[n.id];
-        if(p&&p.fx!=null){ctx.strokeStyle='rgba(255,255,255,.85)';ctx.lineWidth=1.3;ctx.setLineDash([3,3]);
+        if(p&&p.fx!=null){ctx.strokeStyle='rgba(40,55,70,.7)';ctx.lineWidth=1.3;ctx.setLineDash([3,3]);
           ctx.beginPath();ctx.arc(s.x,s.y,r+3.5,0,7);ctx.stroke();ctx.setLineDash([]);}
         /* 이름 — 가깝거나 연결이 있거나 고른 노드만 */
         /* 이름표 — 다 그리면 뒤엉키므로 가까운 것·연결이 많은 것·고른 것만 */
         if(on||hv||(focus&&near.has(n.id))||NS.length<=16||s.a>.72||(DG[n.id]||0)>=4){
           const fs=Math.max(10,Math.min(15,12.5*s.k));
           ctx.font=(on?'600 ':'')+fs+'px "Noto Sans KR",var(--font-sans),sans-serif';ctx.textAlign='center';
-          ctx.shadowColor='rgba(0,0,0,.9)';ctx.shadowBlur=5;
-          ctx.fillStyle=on?'rgba(255,231,180,'+a+')':'rgba(223,233,243,'+(a*.92)+')';
           const t=n.title.length>18?n.title.slice(0,17)+'…':n.title;
-          ctx.fillText(t,s.x,s.y+r+fs+2);ctx.shadowBlur=0;}
+          /* 흰 테두리를 먼저 그려 배경 위에서도 또렷하게 */
+          ctx.lineWidth=3.2;ctx.strokeStyle='rgba(255,255,255,'+(a*.95)+')';ctx.lineJoin='round';
+          ctx.strokeText(t,s.x,s.y+r+fs+2);
+          ctx.fillStyle=on?gRgba(G3.sel,a):gRgba(G3.ink,a*.95);
+          ctx.fillText(t,s.x,s.y+r+fs+2);}
         ctx.globalAlpha=1;});
       raf=requestAnimationFrame(step);
     };
@@ -38551,21 +38595,21 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
   const ov={position:'absolute',zIndex:2,display:'flex',gap:6,alignItems:'center'};
   return <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 5px '+gw+'px',alignItems:'stretch'}}>
     <div>
-      <div style={{position:'relative',border:'1px solid #1C2C3E',borderRadius:8,overflow:'hidden',background:'#0C1622'}}>
+      <div style={{position:'relative',border:'1px solid var(--border-strong)',borderRadius:8,overflow:'hidden',background:'#F4F7FA'}}>
         <canvas ref={cvRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
           onDoubleClick={onDbl}
           style={{width:'100%',height:600,display:'block',cursor:'grab'}}/>
-        <div style={{...ov,left:12,top:11,gap:10,color:'rgba(226,236,245,.62)',font:'500 11.5px var(--font-sans)',pointerEvents:'none'}}>
-          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(226,236,245,.9)'}}>{notes.length}</span> 노트
+        <div style={{...ov,left:12,top:11,gap:10,color:'rgba(60,75,90,.75)',font:'500 11.5px var(--font-sans)',pointerEvents:'none'}}>
+          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(35,48,62,.95)'}}>{notes.length}</span> 노트
           <span style={{opacity:.4}}>·</span>
-          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(226,236,245,.9)'}}>{edges.length}</span> 연결
+          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(35,48,62,.95)'}}>{edges.length}</span> 연결
         </div>
         <div style={{...ov,right:10,top:10}}>
           <GBtn on={!flat} title="입체로 보기 / 평면으로 눕히기" onClick={()=>{setFlat(f=>{const nf=!f;if(nf)A.current=Math.max(A.current,.35);return nf;});}}>{flat?'▦ 평면':'◈ 입체'}</GBtn>
           <GBtn on={auto} title="천천히 자동 회전" onClick={()=>setAuto(a=>!a)}>↻ 회전</GBtn>
           <GBtn title="고정 해제 · 처음 배치로" onClick={reset}>⟲ 초기화</GBtn>
         </div>
-        <div style={{...ov,left:12,bottom:11,gap:12,color:'rgba(226,236,245,.55)',font:'500 11px var(--font-sans)',pointerEvents:'none'}}>
+        <div style={{...ov,left:12,bottom:11,gap:12,color:'rgba(70,85,100,.8)',font:'500 11px var(--font-sans)',pointerEvents:'none'}}>
           <span><span style={{color:G3.color.work}}>●</span> 업무</span>
           <span><span style={{color:G3.color.personal}}>●</span> 개인</span>
           <span style={{opacity:.75}}>공 크기 = 연결 수</span>
@@ -38589,10 +38633,10 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
     </div>
   </div>;
 }
-Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
+Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v4.1';
+const APP_VERSION='v4.2';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
