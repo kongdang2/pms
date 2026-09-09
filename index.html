@@ -36389,6 +36389,16 @@ const MailFolder={
     out.sort((a,b)=>a.name.localeCompare(b.name));
     return out;
   },
+  /* 폴더 상태 — 전체 .eml 개수와 아직 안 읽은 개수 */
+  async stats(ask){
+    const h=await this.ready(ask);if(!h)return null;
+    const seen=this.done();let all=0,neu=0;
+    for await(const e of h.values()){
+      if(e.kind!=='file'||!/\.eml$/i.test(e.name))continue;
+      all++;if(!seen.has(e.name))neu++;
+    }
+    return {all,neu};
+  },
 };
 
 Object.assign(window,{Files,MailFolder,FILES_SQL,BUCKET,PmsImg,PmsLink,pmsRefs,filesToMd,shrinkImage,b64of});
@@ -37311,19 +37321,20 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const folderAcc=()=>{const a=db.accounts.find(x=>x.id===(Store.cfg.mailFolderAcc||'work'))||db.accounts[0];return a?a.id:'work';};
   const pullFolder=async(ask,max)=>{
     let files;
-    try{files=await MailFolder.scan(ask,max||40);}catch(e){if(ask)toast('⚠ '+e.message);return 0;}
-    if(files===null){if(ask)toast('폴더 권한이 필요합니다 — 설정 › 메일 연동에서 폴더를 다시 고르세요');return 0;}
-    if(!files.length){if(ask)toast('새 파일 없음');return 0;}
+    try{files=await MailFolder.scan(ask,max||40);}catch(e){if(ask)toast('⚠ '+e.message);return {read:0,added:0};}
+    if(files===null){if(ask)toast('폴더 권한이 필요합니다 — 설정 › 메일 연동에서 폴더를 다시 고르세요');return {read:0,added:0};}
+    if(!files.length)return {read:0,added:0};
     const items=[],names=[];
     for(const f of files){try{items.push(parseEml(f.text));names.push(f.name);}catch(_){names.push(f.name);}}
-    if(items.length){await stashAttachments(items);importMails(items,folderAcc());}
+    let added=0;
+    if(items.length){await stashAttachments(items);added=importMails(items,folderAcc(),true);}
     MailFolder.markDone(names);
-    return items.length;
+    return {read:files.length,added};
   };
   /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다 */
   const quietSync=async(visible)=>{
     /* 회사 메일 폴더 먼저 — 내 PC 안의 일이라 탭이 안 보여도 돈다. 권한 창은 띄우지 않는다 */
-    try{const n=await pf.current(false);if(n)toast('📁 회사 메일 '+n+'건 가져옴');}catch(_){}
+    try{const r=await pf.current(false);if(r&&r.added)toast('📁 회사 메일 '+r.added+'건 가져옴');}catch(_){}
     if(!visible)return;                    /* Gmail 은 통신이라 탭이 보일 때만 */
     const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');
     if(!targets.length||!Gmail.connected)return;
@@ -37334,6 +37345,24 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     }
     if(added.length){setDb('mails',[...added,...db.mails.filter(m=>!added.some(x=>x.id===m.id))]);
       toast('📬 새 메일 '+added.length+'건');}
+  };
+  /* 폴더에서 남김없이 가져오기. all=true 면 "이미 읽음" 기록을 지우고 처음부터 다시 읽는다 */
+  const pullAll=async(all)=>{
+    if(all)MailFolder.reread();
+    let read=0,added=0;
+    for(let i=0;i<200;i++){
+      const r=await pullFolder(i===0,200);
+      if(!r||!r.read)break;
+      read+=r.read;added+=r.added;
+      toast('읽는 중… '+read+'개 · 새 메일 '+added+'건');
+    }
+    let st=null;try{st=await MailFolder.stats(false);}catch(_){}
+    if(!read){
+      toast(st?('새 파일 없음 · 폴더에 '+st.all+'개 모두 읽음 — 「전부 다시」를 눌러 처음부터 읽을 수 있습니다')
+              :'폴더가 연결되지 않았습니다 — 설정 › 메일 연동에서 폴더를 고르세요');
+      return;
+    }
+    toast('파일 '+read+'개 읽음 · 새 메일 '+added+'건'+(read>added?' · '+(read-added)+'개는 이미 있는 메일':''));
   };
   const pf=React.useRef(pullFolder);pf.current=pullFolder;
   const qs=React.useRef(quietSync);qs.current=quietSync;
@@ -37350,7 +37379,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   },[auto]);
   /* 가져오기 — 이미 있는 메일과도, 이번에 함께 들어온 메일끼리도 겹치는지 본다.
      "지금 저장된 목록"을 기준으로 계산하므로 여러 번 연달아 불러도 두 벌이 되지 않는다 */
-  const importMails=(items,acc)=>{
+  const importMails=(items,acc,quiet)=>{
     let addN=0,fillN=0,dupN=0;
     setDb('mails',prev=>{
       const idx=new Map();                                   /* 열쇠 → 메일 */
@@ -37372,7 +37401,8 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       return fresh.length?[...fresh,...out]:out;
     });
     set({importOpen:false});
-    toast(addN+'건 가져옴'+(fillN?' · '+fillN+'건 내용 채움':'')+(dupN?' · '+dupN+'건은 이미 있음':'')+' · '+accOf(acc).label);
+    if(!quiet)toast(addN+'건 가져옴'+(fillN?' · '+fillN+'건 내용 채움':'')+(dupN?' · '+dupN+'건은 이미 있음':'')+' · '+accOf(acc).label);
+    return addN+fillN;
   };
   /* 같은 메일이 두 벌 들어온 경우 합치기 — 본문·주소가 있는 쪽을 남긴다 */
   const dedupeMails=()=>{
@@ -37392,7 +37422,8 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={async()=>{let tot=0;for(let i=0;i<40;i++){const n=await pullFolder(i===0,200);if(!n)break;tot+=n;toast('가져오는 중… '+tot+'건');}toast(tot?tot+'건 가져옴':'새 파일 없음');}}>폴더</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={()=>pullAll(false)}>폴더</Button>
+        <Button variant="gray" size="sm" icon="↻" title="폴더의 .eml 을 처음부터 전부 다시 읽습니다 (이미 있는 메일은 자동으로 걸러집니다)" onClick={()=>pullAll(true)}>전부 다시</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
         if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
         set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
       toolbarRight={<>{!mobile&&<Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/>}<TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:mobile?150:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}<Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
@@ -39006,7 +39037,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.3';
+const APP_VERSION='v5.4';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
