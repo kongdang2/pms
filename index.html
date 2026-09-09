@@ -36605,7 +36605,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.4'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.5'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36976,6 +36976,32 @@ function msgAttachments(buf,d){
     const name=a.fileName||a.fileNameShort;let bytes=null;
     try{const c=reader&&reader.getAttachment(i);if(c&&c.content)bytes=c.content;}catch(_){}
     return {name,mime:a.attachMimeTag||'',size:bytes?bytes.length:(a.attachmentSize||0),bytes};});}
+/* ---------- 같은 메일 가려내기 ----------
+   Exchange 내부 주소(/O=…)와 실제 메일 주소가 섞여 들어와도 한 통으로 보도록,
+   보낸사람은 "표시 이름"을 우선해 열쇠를 만든다 */
+function fromKey(f){
+  const s=String(f||'').trim();
+  const m=/^\s*"?([^"<]*?)"?\s*<([^>]*)>\s*$/.exec(s);
+  if(m){const nm=(m[1]||'').trim();return (nm||m[2]||'').toLowerCase();}
+  return s.toLowerCase();
+}
+const mailKey=m=>String(m.subject||'').replace(/\s+/g,' ').trim().toLowerCase()
+  +'|'+String(m.date||'').slice(0,16)+'|'+fromKey(m.from);
+const hasBody=m=>!!(m&&m.body)&&!/^\(본문 없음/.test(m.body);
+const attUsable=a=>(a||[]).some(x=>x&&(x.path||x.aid));
+/* 두 벌을 한 통으로 — 본문 있는 쪽을 뼈대로, 빠진 값은 다른 쪽에서 채운다 */
+function mergeMail(a,b){
+  const base=hasBody(a)?a:hasBody(b)?b:a, other=base===a?b:a;
+  const addr=x=>/@/.test(String(x||''));
+  return {...base,
+    from:addr(base.from)?base.from:(addr(other.from)?other.from:base.from),
+    to:addr(base.to)?base.to:(other.to||base.to),
+    cc:base.cc||other.cc,
+    attachments:attUsable(base.attachments)?base.attachments:((other.attachments&&other.attachments.length)?other.attachments:(base.attachments||[])),
+    star:!!(base.star||other.star), read:!!(base.read&&other.read),
+    tags:[...new Set([...(base.tags||[]),...(other.tags||[])])],
+    gid:base.gid||other.gid, acc:base.acc||other.acc};
+}
 /* ---------- 첨부 ---------- */
 /* 옛 형식(문자열)과 새 형식(객체)을 모두 받아 하나로 */
 const attNorm=a=>typeof a==='string'?{name:a}:(a||{});
@@ -37111,16 +37137,30 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     const first=setTimeout(tick,8000);   /* 화면을 연 직후 한 번 */
     return()=>{live=false;clearInterval(t);clearTimeout(first);document.removeEventListener('visibilitychange',onShow);};
   },[auto]);
-  const importMails=(items,acc)=>{const key=m=>(m.subject||'')+'|'+(m.date||'').slice(0,16)+'|'+(m.from||'');const have=new Map(db.mails.map(m=>[key(m),m]));
+  const importMails=(items,acc)=>{const have=new Map(db.mails.map(m=>[mailKey(m),m]));const key=mailKey;
     const fresh=[],refill=[];items.forEach(p=>{const ex=have.get(key(p));if(!ex)fresh.push(p);else if((!ex.body||/^\(본문 없음/.test(ex.body))&&p.body&&p.body!==ex.body)refill.push([ex.id,p]);});
     const ms=fresh.map(p=>({id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p}));
     let mails=db.mails;if(refill.length){const rm=new Map(refill);mails=mails.map(m=>rm.has(m.id)?{...m,body:rm.get(m.id).body,attachments:rm.get(m.id).attachments||m.attachments}:m);}
     if(ms.length||refill.length)setDb('mails',[...ms,...mails]);set({importOpen:false});
     const dup=items.length-ms.length-refill.length;toast(ms.length+'건 가져옴'+(refill.length?' · '+refill.length+'건 본문 채움':'')+(dup?' · '+dup+'건은 이미 있음':'')+' · '+accOf(acc).label);};
+  /* 같은 메일이 두 벌 들어온 경우 합치기 — 본문·주소가 있는 쪽을 남긴다 */
+  const dedupeMails=()=>{
+    const seen=new Map();const out=[];let gone=0;
+    db.mails.forEach(m=>{
+      const k=mailKey(m);const ex=seen.get(k);
+      if(!ex){seen.set(k,m);out.push(m);return;}
+      gone++;
+      const merged=mergeMail(ex,m);
+      const i=out.indexOf(ex);if(i>=0)out[i]=merged;
+      seen.set(k,merged);
+    });
+    if(!gone){toast('중복 없음');return;}
+    setDb('mails',out);set({sel:null,picked:[]});toast(gone+'건 합침');
+  };
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={async()=>{const n=await pullFolder(true);if(n)toast(n+"건 가져옴");}}>폴더</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={async()=>{const n=await pullFolder(true);if(n)toast(n+"건 가져옴");}}>폴더</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
         if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
         set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
       toolbarRight={<><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·보낸 사람·본문" style={{width:220,padding:'4px 8px'}}/><Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
@@ -37266,7 +37306,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,mailKey,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -38739,7 +38779,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v4.4';
+const APP_VERSION='v4.5';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
