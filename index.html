@@ -36989,7 +36989,7 @@ function parseEml(text){const hdrEnd=text.search(/\r?\n\r?\n/);const hdr=hdrEnd<
   /* 한글 "보낸 사람/제목" 붙여넣기 형식도 지원 */
   const kg=k=>{const m=new RegExp('^(?:'+k+')\\s*:\\s*(.*)$','mi').exec(hdr);return m?m[1].trim():'';};
   const dt=g('date')||kg('날짜|보낸 날짜');const d=new Date(dt);
-  return {from:g('from')||kg('보낸 사람'),to:g('to')||kg('받는 사람'),cc:g('cc')||kg('참조'),subject:g('subject')||kg('제목')||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:tidyBody(body),html:sanitizeHtml(out.html),attachments:out.attachments};}
+  return {eid:(H['x-pms-entryid']||'').trim(),from:g('from')||kg('보낸 사람'),to:g('to')||kg('받는 사람'),cc:g('cc')||kg('참조'),subject:g('subject')||kg('제목')||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:tidyBody(body),html:sanitizeHtml(out.html),attachments:out.attachments};}
 
 /* ---------- Outlook .msg ---------- */
 /* RTF → 텍스트. Outlook의 "fromhtml" RTF(HTML을 RTF로 감싼 것)와 일반 RTF 모두 처리. \'xx 바이트는 코드페이지로 디코드 */
@@ -37179,8 +37179,17 @@ function fromKey(f){
   if(m){const nm=(m[1]||'').trim();return (nm||m[2]||'').toLowerCase();}
   return s.toLowerCase();
 }
-const mailKey=m=>String(m.subject||'').replace(/\s+/g,' ').trim().toLowerCase()
-  +'|'+String(m.date||'').slice(0,16)+'|'+fromKey(m.from);
+/* 같은 메일인지 알아보는 "열쇠". 하나라도 겹치면 같은 메일로 본다.
+   ① 회사 메일은 내보내기 스크립트가 넣어 준 고유 번호(EntryID) — 가장 확실하다
+   ② 없으면 제목 + 받은 시각(분) + 보낸사람. 시각은 표기 방식이 달라도 되도록 실제 시간으로 환산해 비교한다 */
+function mailKeys(m){
+  const ks=[];if(m&&m.eid)ks.push('e|'+m.eid);
+  const t=Date.parse((m&&m.date)||'');
+  const when=isFinite(t)?Math.floor(t/60000):String((m&&m.date)||'').slice(0,16);
+  ks.push('h|'+String((m&&m.subject)||'').replace(/\s+/g,' ').trim().toLowerCase()+'|'+when+'|'+fromKey(m&&m.from));
+  return ks;
+}
+const mailKey=m=>mailKeys(m)[mailKeys(m).length-1];
 const hasBody=m=>!!(m&&m.body)&&!/^\(본문 없음/.test(m.body);
 const attUsable=a=>(a||[]).some(x=>x&&(x.path||x.aid));
 /* 두 벌을 한 통으로 — 본문 있는 쪽을 뼈대로, 빠진 값은 다른 쪽에서 채운다 */
@@ -37194,7 +37203,7 @@ function mergeMail(a,b){
     attachments:attUsable(base.attachments)?base.attachments:((other.attachments&&other.attachments.length)?other.attachments:(base.attachments||[])),
     star:!!(base.star||other.star), read:!!(base.read&&other.read),
     tags:[...new Set([...(base.tags||[]),...(other.tags||[])])],
-    gid:base.gid||other.gid, acc:base.acc||other.acc};
+    eid:base.eid||other.eid, gid:base.gid||other.gid, acc:base.acc||other.acc};
 }
 /* ---------- 첨부 ---------- */
 /* 옛 형식(문자열)과 새 형식(객체)을 모두 받아 하나로 */
@@ -37338,22 +37347,43 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     const first=setTimeout(tick,8000);   /* 화면을 연 직후 한 번 */
     return()=>{live=false;clearInterval(t);clearTimeout(first);document.removeEventListener('visibilitychange',onShow);};
   },[auto]);
-  const importMails=(items,acc)=>{const have=new Map(db.mails.map(m=>[mailKey(m),m]));const key=mailKey;
-    const fresh=[],refill=[];items.forEach(p=>{const ex=have.get(key(p));if(!ex)fresh.push(p);else if((!ex.body||/^\(본문 없음/.test(ex.body))&&p.body&&p.body!==ex.body)refill.push([ex.id,p]);});
-    const ms=fresh.map(p=>({id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p}));
-    let mails=db.mails;if(refill.length){const rm=new Map(refill);mails=mails.map(m=>rm.has(m.id)?{...m,body:rm.get(m.id).body,attachments:rm.get(m.id).attachments||m.attachments}:m);}
-    if(ms.length||refill.length)setDb('mails',[...ms,...mails]);set({importOpen:false});
-    const dup=items.length-ms.length-refill.length;toast(ms.length+'건 가져옴'+(refill.length?' · '+refill.length+'건 본문 채움':'')+(dup?' · '+dup+'건은 이미 있음':'')+' · '+accOf(acc).label);};
+  /* 가져오기 — 이미 있는 메일과도, 이번에 함께 들어온 메일끼리도 겹치는지 본다.
+     "지금 저장된 목록"을 기준으로 계산하므로 여러 번 연달아 불러도 두 벌이 되지 않는다 */
+  const importMails=(items,acc)=>{
+    let addN=0,fillN=0,dupN=0;
+    setDb('mails',prev=>{
+      const idx=new Map();                                   /* 열쇠 → 메일 */
+      const reg=m=>mailKeys(m).forEach(k=>idx.set(k,m));
+      const out=prev.slice();prev.forEach(reg);
+      const pos=new Map(out.map((m,i)=>[m.id,i]));
+      const fresh=[];
+      items.forEach(p=>{
+        let ex=null;for(const k of mailKeys(p)){if(idx.has(k)){ex=idx.get(k);break;}}
+        if(!ex){const m={id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p};
+          fresh.push(m);reg(m);addN++;return;}
+        /* 이미 있는 메일 — 본문·첨부·주소가 빠져 있으면 채운다 */
+        const i=pos.has(ex.id)?pos.get(ex.id):-1;const cur=i>=0?out[i]:ex;
+        const merged={...mergeMail(cur,{...p,id:cur.id,acc:cur.acc,folder:cur.folder,star:cur.star,read:cur.read,tags:cur.tags}),id:cur.id,acc:cur.acc,folder:cur.folder};
+        const changed=merged.body!==cur.body||merged.html!==cur.html||attUsable(merged.attachments)!==attUsable(cur.attachments)||merged.from!==cur.from;
+        if(changed){if(i>=0)out[i]=merged;fillN++;}else dupN++;
+        reg(merged);
+      });
+      return fresh.length?[...fresh,...out]:out;
+    });
+    set({importOpen:false});
+    toast(addN+'건 가져옴'+(fillN?' · '+fillN+'건 내용 채움':'')+(dupN?' · '+dupN+'건은 이미 있음':'')+' · '+accOf(acc).label);
+  };
   /* 같은 메일이 두 벌 들어온 경우 합치기 — 본문·주소가 있는 쪽을 남긴다 */
   const dedupeMails=()=>{
     const seen=new Map();const out=[];let gone=0;
+    const reg=m=>mailKeys(m).forEach(k=>seen.set(k,m));
     db.mails.forEach(m=>{
-      const k=mailKey(m);const ex=seen.get(k);
-      if(!ex){seen.set(k,m);out.push(m);return;}
+      let ex=null;for(const k of mailKeys(m)){if(seen.has(k)){ex=seen.get(k);break;}}
+      if(!ex){reg(m);out.push(m);return;}
       gone++;
-      const merged=mergeMail(ex,m);
+      const merged={...mergeMail(ex,m),id:ex.id};
       const i=out.indexOf(ex);if(i>=0)out[i]=merged;
-      seen.set(k,merged);
+      reg(merged);
     });
     if(!gone){toast('중복 없음');return;}
     setDb('mails',out);set({sel:null,picked:[]});toast(gone+'건 합침');
@@ -37513,7 +37543,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -38975,7 +39005,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.1';
+const APP_VERSION='v5.2';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
