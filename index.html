@@ -36283,7 +36283,51 @@ async function filesToMd(list,onStep){
       :((window.AUDIO_EXT&&AUDIO_EXT.test(r.name))||/^audio\//.test(r.type||'')?'[🎙 ':'[📎 ')+r.name+'](pms:'+r.path+')');}
   return {md:md.join('\n\n'),meta};
 }
-Object.assign(window,{Files,FILES_SQL,BUCKET,PmsImg,PmsLink,pmsRefs,filesToMd,shrinkImage,b64of});
+
+/* ── 회사 메일 폴더 지켜보기 ────────────────────────────────────
+   PC에서 도는 스크립트가 새 메일을 .eml 로 떨어뜨리면, 앱이 그 폴더를 읽어 가져온다.
+   브라우저는 폴더를 "권한을 준 만큼만" 볼 수 있다(File System Access API, 크롬 계열).
+   손잡이(handle)는 IndexedDB에 넣어 두므로 다음에 열 때도 같은 폴더를 기억한다 */
+const MAILDIR_KEY='pms.maildir';
+const MAILDONE_KEY='pms.mailfiles';
+const MailFolder={
+  ok(){return typeof window.showDirectoryPicker==='function';},
+  async pick(){
+    if(!this.ok())throw new Error('이 브라우저는 폴더 읽기를 지원하지 않습니다 — 크롬·엣지에서 열어주세요');
+    const h=await window.showDirectoryPicker({id:'pms-mail',mode:'read',startIn:'documents'});
+    await idbPut(MAILDIR_KEY,h);return h.name;
+  },
+  async handle(){try{return await idbGet(MAILDIR_KEY);}catch(_){return null;}},
+  async name(){const h=await this.handle();return h?h.name:'';},
+  async forget(){await idbPut(MAILDIR_KEY,null);localStorage.removeItem(MAILDONE_KEY);},
+  /* ask=true 일 때만 권한 창을 띄운다(자동 실행 중에는 조용히 실패해야 한다) */
+  async ready(ask){
+    const h=await this.handle();if(!h)return null;
+    let st='granted';
+    try{st=await h.queryPermission({mode:'read'});}catch(_){}
+    if(st!=='granted'&&ask){try{st=await h.requestPermission({mode:'read'});}catch(_){st='denied';}}
+    return st==='granted'?h:null;
+  },
+  done(){try{return new Set(JSON.parse(localStorage.getItem(MAILDONE_KEY)||'[]'));}catch(_){return new Set();}},
+  markDone(names){const s=this.done();names.forEach(n=>s.add(n));
+    /* 너무 커지지 않게 최근 3000개만 */
+    localStorage.setItem(MAILDONE_KEY,JSON.stringify([...s].slice(-3000)));},
+  /* 아직 안 읽은 .eml 을 최대 max 개 읽어 온다 */
+  async scan(ask,max){
+    const h=await this.ready(ask);if(!h)return null;
+    const seen=this.done();const out=[];
+    for await(const e of h.values()){
+      if(e.kind!=='file'||!/\.eml$/i.test(e.name))continue;
+      if(seen.has(e.name))continue;
+      try{const f=await e.getFile();out.push({name:e.name,text:await f.text()});}catch(_){}
+      if(out.length>=(max||40))break;
+    }
+    out.sort((a,b)=>a.name.localeCompare(b.name));
+    return out;
+  },
+};
+
+Object.assign(window,{Files,MailFolder,FILES_SQL,BUCKET,PmsImg,PmsLink,pmsRefs,filesToMd,shrinkImage,b64of});
 </script>
 <script type="text/babel">/* ── 음성: 녹음 · 전사 ─────────────────────────────────────────────
    녹음  — 브라우저 MediaRecorder. 긴 회의는 15분마다 조각을 끊어 저장한다(한 파일이 커지면 다루기 어렵다)
@@ -36561,7 +36605,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.3'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.4'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -36655,6 +36699,34 @@ function FilesSection({onToast}){
   </div>;
 }
 
+
+/* 회사 메일 .eml 폴더 지정 */
+function MailFolderSection({onToast}){
+  const {Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const [name,setName]=React.useState('');const [st,setSt]=React.useState('');
+  const refresh=async()=>{const n=await MailFolder.name();setName(n||'');
+    if(n){const h=await MailFolder.ready(false);setSt(h?'granted':'prompt');}else setSt('');};
+  React.useEffect(()=>{refresh();},[]);
+  const pick=async()=>{try{const n=await MailFolder.pick();setName(n);setSt('granted');onToast&&onToast('폴더 지정됨 · '+n);}
+    catch(e){if(!/abort/i.test(e.name||''))onToast&&onToast('⚠ '+e.message);}};
+  const allow=async()=>{const h=await MailFolder.ready(true);setSt(h?'granted':'denied');
+    onToast&&onToast(h?'폴더 접근 허용됨':'허용되지 않았습니다');};
+  const forget=async()=>{await MailFolder.forget();setName('');setSt('');onToast&&onToast('폴더 연결 해제');};
+  if(!MailFolder.ok())return <InfoBar tone="warn">이 브라우저는 폴더 읽기를 지원하지 않습니다 — 크롬·엣지에서 열어주세요(사파리·파이어폭스 미지원).</InfoBar>;
+  return <div style={{margin:'6px 0 10px'}}>
+    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+      <Button variant="classic" size="sm" icon="📁" onClick={pick}>{name?'폴더 바꾸기':'폴더 고르기'}</Button>
+      {name&&<Badge tone={st==='granted'?'linked':'muted'}>{name}{st==='granted'?' · 읽기 허용':' · 권한 필요'}</Badge>}
+      {name&&st!=='granted'&&<Button variant="gray" size="sm" onClick={allow}>권한 다시 주기</Button>}
+      {name&&<Button variant="ghost" size="sm" onClick={forget}>연결 해제</Button>}
+    </div>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:6,lineHeight:1.55}}>
+      스크립트가 저장하는 폴더(예: <code>문서\PMS_Mail</code>)를 고르세요. 자동 동기화 주기마다 새 <code>.eml</code>만 읽어 갑니다.
+      브라우저를 새로 열면 권한을 한 번 더 확인할 수 있습니다 — 그때는 이 화면에서 「권한 다시 주기」를 누르세요.
+    </div>
+  </div>;
+}
+
 /* 음성 전사 설정 */
 function SttTab({c,setC}){
   const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
@@ -36729,7 +36801,10 @@ function SettingsModal({open,onClose,onToast}){
       <FilesSection onToast={onToast}/>
     </>}
     {tab==='mail'&&<>
-      <InfoBar>회사 메일은 웹메일에서 <b>.eml로 내려받아</b> 메일 화면의 📥 가져오기에 끌어놓는 방식으로 씁니다. 사내 정책상 외부 IMAP·자동 전달은 보통 막혀 있어, 이 경로가 가장 안전합니다.</InfoBar>
+      <div style={{font:'var(--type-card-title)',marginBottom:6}}>회사 메일 (.eml 폴더)</div>
+      <InfoBar>회사 PC에서 <b>내보내기 스크립트</b>가 새 메일을 <code>.eml</code>로 폴더에 떨어뜨리면, 이 앱이 그 폴더를 읽어 자동으로 가져옵니다. 메일이 사내 PC 밖으로 나가지 않고, 외부 전달 기록도 남지 않습니다 — 가이드 12</InfoBar>
+      <MailFolderSection onToast={onToast}/>
+      <Field label="가져온 회사 메일을 넣을 계정" row><Select value={c.mailFolderAcc||'work'} onChange={v=>setC({...c,mailFolderAcc:v})} options={[{id:'work',label:'회사'},{id:'home',label:'개인'}]}/></Field>
       <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>개인 메일 (Gmail)</div>
       <InfoBar>Google 콘솔에서 Gmail API를 켜고 OAuth 클라이언트(웹)를 만든 뒤 Client ID를 입력하면 메일 화면의 🔗 계정 연결에서 "Google 연결"이 활성화됩니다(가이드 04). 호스팅 주소에서는 pms.config.js의 gmailClientId로도 지정할 수 있습니다.</InfoBar>
       <Field label="Gmail OAuth Client ID"><TextInput value={c.gmailClientId||''} onChange={set('gmailClientId')} placeholder="xxxx.apps.googleusercontent.com"/></Field>
@@ -36781,7 +36856,7 @@ function ClaudeTab({c,setC}){
     </div>
   </>;
 }
-Object.assign(window,{TrashModal,Login,SettingsModal});
+Object.assign(window,{TrashModal,Login,SettingsModal,MailFolderSection});
 </script>
 <script type="text/babel">/* 메일 관리: 계정/폴더 내비 · 목록 | 읽기 · 작성 · 가져오기 · 계정 연결 */
 const FOLDERS=[{id:'inbox',num:'①',label:'받은편지함'},{id:'starred',num:'②',label:'별표'},{id:'sent',num:'③',label:'보낸편지함'},{id:'draft',num:'④',label:'임시보관'},{id:'archive',num:'⑤',label:'보관'}];
@@ -36996,8 +37071,23 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
         toast((added.length?`✓ ${added.length}건 새로 가져옴`:'새 메일 없음')+tail);}}
     catch(e){toast('⚠ 동기화 실패: '+explainGmailError(e));}
     setBusy('');};
+  /* 회사 메일 폴더(PC 스크립트가 떨군 .eml)에서 가져오기 */
+  const folderAcc=()=>{const a=db.accounts.find(x=>x.id===(Store.cfg.mailFolderAcc||'work'))||db.accounts[0];return a?a.id:'work';};
+  const pullFolder=async(ask)=>{
+    let files;
+    try{files=await MailFolder.scan(ask,40);}catch(e){if(ask)toast('⚠ '+e.message);return 0;}
+    if(files===null){if(ask)toast('폴더 권한이 필요합니다 — 설정 › 메일 연동에서 폴더를 다시 고르세요');return 0;}
+    if(!files.length){if(ask)toast('새 파일 없음');return 0;}
+    const items=[],names=[];
+    for(const f of files){try{items.push(parseEml(f.text));names.push(f.name);}catch(_){names.push(f.name);}}
+    if(items.length){await stashAttachments(items);importMails(items,folderAcc());}
+    MailFolder.markDone(names);
+    return items.length;
+  };
   /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다 */
   const quietSync=async()=>{
+    /* 회사 메일 폴더 먼저 — 권한 창은 띄우지 않는다 */
+    try{const n=await pf.current(false);if(n)toast('📁 회사 메일 '+n+'건 가져옴');}catch(_){}
     const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');
     if(!targets.length||!Gmail.connected)return;
     let added=[];
@@ -37008,6 +37098,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     if(added.length){setDb('mails',[...added,...db.mails.filter(m=>!added.some(x=>x.id===m.id))]);
       toast('📬 새 메일 '+added.length+'건');}
   };
+  const pf=React.useRef(pullFolder);pf.current=pullFolder;
   const qs=React.useRef(quietSync);qs.current=quietSync;
   const auto=+(Store.cfg.mailAuto||0);
   React.useEffect(()=>{
@@ -37029,7 +37120,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={async()=>{const n=await pullFolder(true);if(n)toast(n+"건 가져옴");}}>폴더</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
         if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
         set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
       toolbarRight={<><TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder="🔍 제목·보낸 사람·본문" style={{width:220,padding:'4px 8px'}}/><Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
@@ -38648,7 +38739,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v4.3';
+const APP_VERSION='v4.4';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
