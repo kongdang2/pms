@@ -37183,7 +37183,8 @@ function fromKey(f){
    ① 회사 메일은 내보내기 스크립트가 넣어 준 고유 번호(EntryID) — 가장 확실하다
    ② 없으면 제목 + 받은 시각(분) + 보낸사람. 시각은 표기 방식이 달라도 되도록 실제 시간으로 환산해 비교한다 */
 function mailKeys(m){
-  const ks=[];if(m&&m.eid)ks.push('e|'+m.eid);
+  /* 60자 미만이면 잘려 나온 옛 파일이라 메일을 구분하지 못한다 — 그럴 땐 아래 ②만 쓴다 */
+  const ks=[];const e=(m&&m.eid)||'';if(e.length>=60)ks.push('e|'+e);
   const t=Date.parse((m&&m.date)||'');
   const when=isFinite(t)?Math.floor(t/60000):String((m&&m.date)||'').slice(0,16);
   ks.push('h|'+String((m&&m.subject)||'').replace(/\s+/g,' ').trim().toLowerCase()+'|'+when+'|'+fromKey(m&&m.from));
@@ -39005,7 +39006,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.2';
+const APP_VERSION='v5.3';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
