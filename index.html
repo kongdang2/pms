@@ -36561,7 +36561,7 @@ function Login({onLogin}){
   const go=async(signup)=>{setErr('');if(!email||!pw){setErr('이메일과 비밀번호를 입력하세요');return;}setBusy(true);try{if(signup)await Store.signUp(email,pw);else await Store.signIn(email,pw);if(Store.user)onLogin(Store.user);else setErr('가입 확인 메일을 보냈습니다 — 메일의 Confirm 링크를 누른 뒤 여기서 로그인하세요');}catch(e){setErr(e.message||String(e));}setBusy(false);};
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
-      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.2'}</Badge></div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v4.3'}</Badge></div>
       <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
@@ -38379,24 +38379,32 @@ function SearchView({notes,onPick,onWiki}){
    노드 드래그 = 위치 고정 · Shift+노드 드래그 = 연결 · 선 클릭 = 연결 해제
    직접 만든 3차원 힘-방향 배치 + 원근 투영(외부 라이브러리 없음) */
 const G3={
-  color:{work:'#2C6FA6',personal:'#1C8A66'},   /* 밝은 배경에서 또렷하도록 진하게 */
-  sel:'#C8790C', focal:760, minDist:340, maxDist:2400,
-  ink:'#25313D',                                /* 이름표 글자색 */
+  color:{work:'#E9EBEE',personal:'#DCD8D0'},   /* 어두운 배경 위의 흰 공 — 업무는 차갑게, 개인은 따뜻하게 */
+  sel:'#FFFFFF',                                /* 고른 노드 */
+  ink:'#F2F4F7',                                /* 이름표 글자색 */
+  halo:'rgba(0,0,0,.92)',                       /* 이름표 외곽선 */
+  bg:['#141619','#0A0C0E','#000000'],           /* 배경 그라데이션 — D안 순검정 */
+  frame:'#0B0D10', border:'#22262C',            /* 캔버스 틀 */
+  ui:'rgba(226,232,240,.62)', uiStrong:'rgba(240,244,248,.92)',
+  dark:true,
+  focal:760, minDist:340, maxDist:2400,
 };
 /* 색을 밝게(amt>0) 또는 어둡게(amt<0) */
-function gTint(hex,amt){const n=parseInt(hex.slice(1),16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+function gTint(hex,amt){if(hex[0]!=='#')hex=gHex(hex);const n=parseInt(hex.slice(1),16),r=(n>>16)&255,g=(n>>8)&255,b=n&255;
   const m=v=>Math.max(0,Math.min(255,Math.round(amt>0?v+(255-v)*amt:v*(1+amt))));
   return 'rgb('+m(r)+','+m(g)+','+m(b)+')';}
 function gHex(rgb){const m=/(\d+),\s*(\d+),\s*(\d+)/.exec(rgb);if(!m)return rgb;
   return '#'+[1,2,3].map(i=>(+m[i]).toString(16).padStart(2,'0')).join('');}
+function gRgba2(rgba,a){const m=/rgba?\(([^)]+)\)/.exec(rgba);if(!m)return rgba;
+  const v=m[1].split(',').map(x=>x.trim());return 'rgba('+v[0]+','+v[1]+','+v[2]+','+(a*(v[3]!==undefined?+v[3]:1)).toFixed(3)+')';}
 function gRgba(hex,a){const n=parseInt(hex.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a.toFixed(3)+')';}
 /* 캔버스 위에 얹는 작은 버튼 */
 function GBtn({on,onClick,title,children}){
   const [h,setH]=React.useState(false);
   return <button type="button" title={title} onClick={onClick} onMouseEnter={()=>setH(true)} onMouseLeave={()=>setH(false)}
-    style={{border:'1px solid '+(on?'rgba(200,121,12,.6)':'rgba(40,55,70,.22)'),borderRadius:6,padding:'4px 10px',
-      background:on?'rgba(200,121,12,.14)':h?'rgba(255,255,255,.95)':'rgba(255,255,255,.7)',
-      color:on?'#8A5300':'rgba(40,55,70,.92)',font:'500 11.5px var(--font-sans)',cursor:'pointer',backdropFilter:'blur(6px)'}}>{children}</button>;
+    style={{border:'1px solid '+(on?gRgba(G3.sel,.55):(G3.dark?'rgba(255,255,255,.2)':'rgba(40,55,70,.22)')),borderRadius:6,padding:'4px 10px',
+      background:on?gRgba(G3.sel,G3.dark?.18:.14):(G3.dark?(h?'rgba(255,255,255,.14)':'rgba(255,255,255,.06)'):(h?'rgba(255,255,255,.95)':'rgba(255,255,255,.7)')),
+      color:on?(G3.dark?G3.sel:'#8A5300'):(G3.dark?'rgba(232,238,245,.9)':'rgba(40,55,70,.92)'),font:'500 11.5px var(--font-sans)',cursor:'pointer',backdropFilter:'blur(6px)'}}>{children}</button>;
 }
 function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
   const {Button}=window.HDWorkbookDesignSystem_ad60e4;
@@ -38479,12 +38487,12 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
       /* 초점: 고른(또는 가리킨) 노드와 그 이웃만 또렷하게 */
       const focus=HV||SEL;
       const near=new Set();if(focus){near.add(focus);ES.forEach(e=>{if(e.from===focus)near.add(e.to);if(e.to===focus)near.add(e.from);});}
-      const dim=id=>focus&&!near.has(id)?.46:1;
+      const dim=id=>focus&&!near.has(id)?.62:1;
 
       /* ③ 배경 */
       ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,cw,ch);
       const bg=ctx.createRadialGradient(cw*.5,ch*.42,20,cw*.5,ch*.42,Math.max(cw,ch)*.78);
-      bg.addColorStop(0,'#FFFFFF');bg.addColorStop(.55,'#F2F5F8');bg.addColorStop(1,'#E6EBF1');
+      bg.addColorStop(0,G3.bg[0]);bg.addColorStop(.55,G3.bg[1]);bg.addColorStop(1,G3.bg[2]);
       ctx.fillStyle=bg;ctx.fillRect(0,0,cw,ch);
 
       /* ④ 간선 — 먼 것부터 */
@@ -38519,26 +38527,30 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
           const hg=ctx.createRadialGradient(s.x,s.y,r*.6,s.x,s.y,r*3.2);
           hg.addColorStop(0,gRgba(col,.34));hg.addColorStop(1,gRgba(col,0));
           ctx.fillStyle=hg;ctx.beginPath();ctx.arc(s.x,s.y,r*3.2,0,7);ctx.fill();}
-        ctx.globalAlpha=a;
+        /* 공은 비치지 않게 — 멀거나 초점 밖인 것은 투명도 대신 배경 쪽으로 색을 죽여 물러나게 한다 */
+        const col2=gHex(gTint(col,(G3.dark?-1:1)*(1-a)*.62));
+        ctx.globalAlpha=1;
         if(on||hv){ctx.shadowColor=gRgba(col,.9);ctx.shadowBlur=16;}
-        const g=ctx.createRadialGradient(s.x-r*.38,s.y-r*.42,r*.12,s.x,s.y,r*1.05);
-        g.addColorStop(0,gTint(col,.42));g.addColorStop(.5,col);g.addColorStop(1,gTint(col,-.34));
-        ctx.fillStyle=g;ctx.beginPath();ctx.arc(s.x,s.y,r,0,7);ctx.fill();ctx.shadowBlur=0;
-        ctx.strokeStyle=gRgba(gHex(gTint(col,-.45)),.9);ctx.lineWidth=1;ctx.stroke();
+        /* 평면 원 — 음영 없이 단색. 거리는 밝기와 크기로만 나타낸다 */
+        ctx.fillStyle=col2;ctx.beginPath();ctx.arc(s.x,s.y,r,0,7);ctx.fill();ctx.shadowBlur=0;
+        ctx.strokeStyle=gRgba(gHex(gTint(col2,G3.dark?-.28:-.45)),G3.dark?.7:.9);ctx.lineWidth=1;ctx.stroke();
         const p=P.current[n.id];
-        if(p&&p.fx!=null){ctx.strokeStyle='rgba(40,55,70,.7)';ctx.lineWidth=1.3;ctx.setLineDash([3,3]);
+        if(p&&p.fx!=null){ctx.strokeStyle=G3.dark?'rgba(255,255,255,.8)':'rgba(40,55,70,.7)';ctx.lineWidth=1.3;ctx.setLineDash([3,3]);
           ctx.beginPath();ctx.arc(s.x,s.y,r+3.5,0,7);ctx.stroke();ctx.setLineDash([]);}
         /* 이름 — 가깝거나 연결이 있거나 고른 노드만 */
         /* 이름표 — 다 그리면 뒤엉키므로 가까운 것·연결이 많은 것·고른 것만 */
         if(on||hv||(focus&&near.has(n.id))||NS.length<=16||s.a>.72||(DG[n.id]||0)>=4){
           const fs=Math.max(10,Math.min(15,12.5*s.k));
-          ctx.font=(on?'600 ':'')+fs+'px "Noto Sans KR",var(--font-sans),sans-serif';ctx.textAlign='center';
+          ctx.font=(on?'700 ':'500 ')+fs+'px "Noto Sans KR",var(--font-sans),sans-serif';ctx.textAlign='center';
           const t=n.title.length>18?n.title.slice(0,17)+'…':n.title;
-          /* 흰 테두리를 먼저 그려 배경 위에서도 또렷하게 */
-          ctx.lineWidth=3.2;ctx.strokeStyle='rgba(255,255,255,'+(a*.95)+')';ctx.lineJoin='round';
+          /* 이름표는 공·선보다 진하게 유지한다 — 흐려지면 읽을 수가 없다 */
+          const la=Math.max(.82,a);
+          ctx.globalAlpha=1;
+          ctx.lineWidth=3.4;ctx.strokeStyle=gRgba2(G3.halo,la*.98);ctx.lineJoin='round';
           ctx.strokeText(t,s.x,s.y+r+fs+2);
-          ctx.fillStyle=on?gRgba(G3.sel,a):gRgba(G3.ink,a*.95);
-          ctx.fillText(t,s.x,s.y+r+fs+2);}
+          ctx.fillStyle=on?gRgba(G3.sel,1):gRgba(G3.ink,la);
+          ctx.fillText(t,s.x,s.y+r+fs+2);
+          ctx.globalAlpha=a;}
         ctx.globalAlpha=1;});
       raf=requestAnimationFrame(step);
     };
@@ -38595,21 +38607,21 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
   const ov={position:'absolute',zIndex:2,display:'flex',gap:6,alignItems:'center'};
   return <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 5px '+gw+'px',alignItems:'stretch'}}>
     <div>
-      <div style={{position:'relative',border:'1px solid var(--border-strong)',borderRadius:8,overflow:'hidden',background:'#F4F7FA'}}>
+      <div style={{position:'relative',border:'1px solid '+G3.border,borderRadius:8,overflow:'hidden',background:G3.frame}}>
         <canvas ref={cvRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
           onDoubleClick={onDbl}
           style={{width:'100%',height:600,display:'block',cursor:'grab'}}/>
-        <div style={{...ov,left:12,top:11,gap:10,color:'rgba(60,75,90,.75)',font:'500 11.5px var(--font-sans)',pointerEvents:'none'}}>
-          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(35,48,62,.95)'}}>{notes.length}</span> 노트
+        <div style={{...ov,left:12,top:11,gap:10,color:G3.ui,font:'500 11.5px var(--font-sans)',pointerEvents:'none'}}>
+          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:G3.uiStrong}}>{notes.length}</span> 노트
           <span style={{opacity:.4}}>·</span>
-          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:'rgba(35,48,62,.95)'}}>{edges.length}</span> 연결
+          <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:G3.uiStrong}}>{edges.length}</span> 연결
         </div>
         <div style={{...ov,right:10,top:10}}>
           <GBtn on={!flat} title="입체로 보기 / 평면으로 눕히기" onClick={()=>{setFlat(f=>{const nf=!f;if(nf)A.current=Math.max(A.current,.35);return nf;});}}>{flat?'▦ 평면':'◈ 입체'}</GBtn>
           <GBtn on={auto} title="천천히 자동 회전" onClick={()=>setAuto(a=>!a)}>↻ 회전</GBtn>
           <GBtn title="고정 해제 · 처음 배치로" onClick={reset}>⟲ 초기화</GBtn>
         </div>
-        <div style={{...ov,left:12,bottom:11,gap:12,color:'rgba(70,85,100,.8)',font:'500 11px var(--font-sans)',pointerEvents:'none'}}>
+        <div style={{...ov,left:12,bottom:11,gap:12,color:G3.ui,font:'500 11px var(--font-sans)',pointerEvents:'none'}}>
           <span><span style={{color:G3.color.work}}>●</span> 업무</span>
           <span><span style={{color:G3.color.personal}}>●</span> 개인</span>
           <span style={{opacity:.75}}>공 크기 = 연결 수</span>
@@ -38636,7 +38648,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v4.2';
+const APP_VERSION='v4.3';
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
