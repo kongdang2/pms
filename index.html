@@ -36895,6 +36895,15 @@ function SettingsModal({open,onClose,onToast}){
       <InfoBar>회사 PC에서 <b>내보내기 스크립트</b>가 새 메일을 <code>.eml</code>로 폴더에 떨어뜨리면, 이 앱이 그 폴더를 읽어 자동으로 가져옵니다. 메일이 사내 PC 밖으로 나가지 않고, 외부 전달 기록도 남지 않습니다 — 가이드 12</InfoBar>
       <MailFolderSection onToast={onToast}/>
       <Field label="가져온 회사 메일을 넣을 계정" row><Select value={c.mailFolderAcc||'work'} onChange={v=>setC({...c,mailFolderAcc:v})} options={[{id:'work',label:'회사'},{id:'home',label:'개인'}]}/></Field>
+      <Field label="보낸사람 차단 목록 — 여기 적은 곳에서 온 회사 메일은 가져오지 않습니다">
+        <textarea value={c.mailBlock||''} onChange={e=>setC({...c,mailBlock:e.target.value})} rows={5}
+          placeholder={'@rim-intelligence.jp\nnoreply@\n세미나 안내\nnewsletter'}
+          style={{...inputStyle,width:'100%',resize:'vertical',fontFamily:'var(--font-sans)',lineHeight:1.6}}/>
+      </Field>
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',margin:'-4px 0 10px',lineHeight:1.7}}>
+        한 줄에 하나씩 적습니다. <b>@</b>로 시작하면 그 <b>도메인 전체</b>(<code>@sale.co.kr</code>), 그 밖에는 <b>주소나 보낸사람 이름에 그 글자가 들어가면</b> 걸립니다(<code>noreply@</code>, <code>newsletter</code>).
+        차단된 메일은 버려지지 않고 메일 화면 <b>⛔ 차단됨</b>에 쌓이므로, 잘못 걸렀으면 골라서 되살릴 수 있습니다. 이미 가져온 메일에는 영향이 없습니다.
+      </div>
       <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>개인 메일 (Gmail)</div>
       <InfoBar>Google 콘솔에서 Gmail API를 켜고 OAuth 클라이언트(웹)를 만든 뒤 Client ID를 입력하면 메일 화면의 🔗 계정 연결에서 "Google 연결"이 활성화됩니다(가이드 04). 호스팅 주소에서는 pms.config.js의 gmailClientId로도 지정할 수 있습니다.</InfoBar>
       <Field label="Gmail OAuth Client ID"><TextInput value={c.gmailClientId||''} onChange={set('gmailClientId')} placeholder="xxxx.apps.googleusercontent.com"/></Field>
@@ -37201,6 +37210,28 @@ function mailKeys(m){
   return ks;
 }
 const mailKey=m=>mailKeys(m)[mailKeys(m).length-1];
+/* ── 보낸사람 차단 목록 ─────────────────────────────────
+   설정에 적어 둔 주소·도메인·이름 조각과 겹치면 가져오지 않는다.
+   "@sale.co.kr" 처럼 @로 시작하면 도메인 전체, 그 외에는 주소나 표시 이름에 그 글자가 들어가면 걸린다 */
+const blockList=()=>String(Store.cfg.mailBlock||'').split(/[\n,;]+/).map(x=>x.trim().toLowerCase()).filter(Boolean);
+const addrOf=f=>{const m=/<([^>]*)>/.exec(String(f||''));return (m?m[1]:String(f||'')).trim().toLowerCase();};
+function blockedBy(m,rules){
+  const a=addrOf(m&&m.from), whole=String((m&&m.from)||'').toLowerCase();
+  for(const r of (rules||blockList())){
+    if(r[0]==='@'){if(a.endsWith(r))return r;continue;}
+    if(a===r||a.includes(r)||whole.includes(r))return r;
+  }
+  return '';
+}
+/* 차단돼 들어오지 않은 메일 보관함 — 브라우저에만 남기고 최근 300건까지 */
+const BLOCK_KEY='pms.mailblocked';
+const Blocked={
+  list(){try{return JSON.parse(localStorage.getItem(BLOCK_KEY)||'[]');}catch(_){return [];}},
+  save(a){try{localStorage.setItem(BLOCK_KEY,JSON.stringify(a.slice(-300)));}catch(_){}},
+  add(ms){if(!ms||!ms.length)return;this.save([...this.list(),...ms]);},
+  remove(keys){const k=new Set(keys);this.save(this.list().filter(m=>!k.has(m.file||m.subject)));},
+  clear(){try{localStorage.removeItem(BLOCK_KEY);}catch(_){}},
+};
 const hasBody=m=>!!(m&&m.body)&&!/^\(본문 없음/.test(m.body);
 const attUsable=a=>(a||[]).some(x=>x&&(x.path||x.aid));
 /* 두 벌을 한 통으로 — 본문 있는 쪽을 뼈대로, 빠진 값은 다른 쪽에서 채운다 */
@@ -37324,12 +37355,19 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     try{files=await MailFolder.scan(ask,max||40);}catch(e){if(ask)toast('⚠ '+e.message);return {read:0,added:0};}
     if(files===null){if(ask)toast('폴더 권한이 필요합니다 — 설정 › 메일 연동에서 폴더를 다시 고르세요');return {read:0,added:0};}
     if(!files.length)return {read:0,added:0};
-    const items=[],names=[];
-    for(const f of files){try{items.push(parseEml(f.text));names.push(f.name);}catch(_){names.push(f.name);}}
+    const items=[],names=[],blocked=[];const rules=blockList();
+    for(const f of files){
+      names.push(f.name);
+      let m;try{m=parseEml(f.text);}catch(_){continue;}
+      const hit=blockedBy(m,rules);
+      if(hit){blocked.push({...m,html:'',attachments:[],body:String(m.body||'').slice(0,20000),rule:hit,file:f.name});continue;}
+      items.push(m);
+    }
+    if(blocked.length)Blocked.add(blocked);
     let added=0;
     if(items.length){await stashAttachments(items);added=importMails(items,folderAcc(),true);}
     MailFolder.markDone(names);
-    return {read:files.length,added};
+    return {read:files.length,added,blocked:blocked.length};
   };
   /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다 */
   const quietSync=async(visible)=>{
@@ -37347,13 +37385,14 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       toast('📬 새 메일 '+added.length+'건');}
   };
   /* 폴더에서 남김없이 가져오기. all=true 면 "이미 읽음" 기록을 지우고 처음부터 다시 읽는다 */
+  const [blkN,setBlkN]=React.useState(()=>Blocked.list().length);
   const pullAll=async(all)=>{
     if(all)MailFolder.reread();
-    let read=0,added=0;
+    let read=0,added=0,blk=0;
     for(let i=0;i<200;i++){
       const r=await pullFolder(i===0,200);
       if(!r||!r.read)break;
-      read+=r.read;added+=r.added;
+      read+=r.read;added+=r.added;blk+=(r.blocked||0);
       toast('읽는 중… '+read+'개 · 새 메일 '+added+'건');
     }
     let st=null;try{st=await MailFolder.stats(false);}catch(_){}
@@ -37362,7 +37401,9 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
               :'폴더가 연결되지 않았습니다 — 설정 › 메일 연동에서 폴더를 고르세요');
       return;
     }
-    toast('파일 '+read+'개 읽음 · 새 메일 '+added+'건'+(read>added?' · '+(read-added)+'개는 이미 있는 메일':''));
+    setBlkN(Blocked.list().length);
+    const dup=read-added-blk;
+    toast('파일 '+read+'개 읽음 · 새 메일 '+added+'건'+(blk?' · 차단 '+blk+'건':'')+(dup>0?' · '+dup+'개는 이미 있는 메일':''));
   };
   const pf=React.useRef(pullFolder);pf.current=pullFolder;
   const qs=React.useRef(quietSync);qs.current=quietSync;
@@ -37425,7 +37466,8 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={()=>pullAll(false)}>폴더</Button>
         <Button variant="gray" size="sm" icon="↻" title="폴더의 .eml 을 처음부터 전부 다시 읽습니다 (이미 있는 메일은 자동으로 걸러집니다)" onClick={()=>pullAll(true)}>전부 다시</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
         if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
-        set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
+        set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>
+        <Button variant="gray" size="sm" icon="⛔" title="보낸사람 차단 목록에 걸려 안 가져온 회사 메일을 보고 되살립니다" onClick={()=>set({blk:true})}>차단됨{blkN?' '+blkN:''}</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
       toolbarRight={<>{!mobile&&<Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/>}<TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:mobile?150:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}<Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
       {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)',flexWrap:'wrap'}}>
         <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>건 선택
@@ -37486,6 +37528,8 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       </div>)}
       <div style={{marginTop:10}}><Button variant="ghost" size="sm" onClick={()=>{set({accOpen:false});openSettings('mail');}}>⚙ 연동 설정 열기</Button></div>
     </Modal>
+    <BlockedModal open={!!st.blk} toast={toast} onClose={()=>{set({blk:false});setBlkN(Blocked.list().length);}}
+      onRestore={mails=>importMails(mails,folderAcc())}/>
     <ExcludedModal open={!!st.excl} acc={st.excl} toast={toast} onClose={()=>set({excl:null})}
       onRestore={mails=>setDb('mails',[...mails,...db.mails.filter(m=>!mails.some(x=>x.id===m.id))])}/>
     <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null,picked:[]})}/>
@@ -37499,6 +37543,35 @@ function MailRow({m,on,picked,onPick,acc,onClick,onStar}){const [h,setH]=React.u
     <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(m.body||'').split('\n')[0]}</div></div>
   <div onClick={onClick} style={{textAlign:'right',fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',cursor:'pointer'}}>{fmtDT(m.date)}<div style={{marginTop:3,color:acc.provider==='gmail'?'var(--color-success)':'var(--color-accent)',fontFamily:'var(--font-sans)'}}>{acc.label||''}</div></div>
 </div>;}
+/* 차단 목록에 걸려 안 가져온 회사 메일 — 보고 고른 것만 되살린다 */
+function BlockedModal({open,onClose,onRestore,toast}){
+  const {Button,Modal,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [rows,setRows]=React.useState([]);const [pick,setPick]=React.useState([]);
+  React.useEffect(()=>{if(open){setRows(Blocked.list().slice().reverse());setPick([]);}},[open]);
+  if(!open)return null;
+  const keyOf=m=>m.file||m.subject;
+  const toggle=k=>setPick(p=>p.includes(k)?p.filter(x=>x!==k):[...p,k]);
+  const restore=()=>{
+    const sel=rows.filter(m=>pick.includes(keyOf(m)));if(!sel.length)return;
+    onRestore(sel.map(m=>{const o={...m};delete o.rule;delete o.file;return o;}));
+    Blocked.remove(pick);setRows(rows.filter(m=>!pick.includes(keyOf(m))));setPick([]);
+    toast(sel.length+'건 되살림');
+  };
+  return <Modal open={open} onClose={onClose} title="차단 목록에 걸린 메일" width={760}
+    footer={<><Button variant="ghost" onClick={()=>{if(rows.length){Blocked.clear();setRows([]);setPick([]);toast('보관함을 비웠습니다');}}}>보관함 비우기</Button>
+      <span style={{flex:1}}/><Button variant="gray" onClick={onClose}>닫기</Button>
+      <Button disabled={!pick.length} onClick={restore}>{pick.length?pick.length+'건 되살리기':'되살리기'}</Button></>}>
+    <InfoBar>설정 › 메일 연동의 <b>보낸사람 차단 목록</b>에 걸려 가져오지 않은 메일입니다. 이 목록은 이 브라우저에만 남고, 최근 300건까지 보관합니다.</InfoBar>
+    {!rows.length&&<div style={{padding:28,textAlign:'center',color:'var(--text-label)'}}>차단된 메일 없음</div>}
+    {rows.map(m=><label key={keyOf(m)} style={{display:'grid',gridTemplateColumns:'20px 1fr 150px 92px',gap:8,alignItems:'start',padding:'7px 2px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',fontSize:'var(--fs-base)'}}>
+      <input type="checkbox" checked={pick.includes(keyOf(m))} onChange={()=>toggle(keyOf(m))}/>
+      <span style={{minWidth:0,overflow:'hidden'}}><span style={{fontWeight:600,display:'block',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.subject}</span>
+        <span style={{color:'var(--text-muted)',fontSize:'var(--fs-sm)'}}>{m.from}</span></span>
+      <Badge tone="muted">규칙: {m.rule}</Badge>
+      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',textAlign:'right'}}>{fmtDT(m.date)}</span>
+    </label>)}
+  </Modal>;
+}
 /* 필터에 걸려 안 가져온 메일 — 목록을 보고 고른 것만 되살린다 */
 function ExcludedModal({open,acc,onClose,onRestore,toast}){
   const {Button,Modal,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
@@ -37575,7 +37648,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,BlockedModal,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -37636,9 +37709,11 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   </>;
 }
 
-function EvChip({e,onClick,compact,draggable,onDragStart}){
+function EvChip({e,onClick,compact,draggable,onDragStart,carrying}){
   return <div draggable={draggable} onDragStart={onDragStart} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
-    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:compact?11:12,color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}>
+    data-ev={draggable?e.id:undefined} data-title={e.title}
+    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:compact?11:12,color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',
+      opacity:carrying?.35:1,outline:carrying?'1px dashed '+CAL_COLOR[e.cal]:'none'}}>
     {e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
     <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{e.title||'(제목 없음)'}</span>
     {e.status==='doing'&&<span style={{color:CAL_COLOR[e.cal],fontSize:9}}>◐</span>}
@@ -37671,14 +37746,63 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove}){
   const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[41])stones.push({m,e});}));
   const [over,setOver]=React.useState(null);
   const drop=d=>ev=>{ev.preventDefault();setOver(null);const id=ev.dataTransfer.getData('text/pms-event');if(id)onMove(id,{date:d});};
-  return <div style={{border:'1px solid var(--border-strong)'}}>
+  /* ── 폰: 길게 눌러 옮기기 ──
+     일정을 0.4초쯤 누르고 있으면 "집었다"가 되고, 그대로 손가락을 끌면 날짜 칸이 따라 밝아진다.
+     떼면 그 날짜로 옮긴다. 살짝 누르면 예전처럼 그냥 열린다 */
+  const gridRef=React.useRef();const mobile=useMobile();
+  const [carry,setCarry]=React.useState(null);
+  const CR=React.useRef({});CR.current.move=onMove;
+  React.useEffect(()=>{
+    const el=gridRef.current;if(!el)return;
+    let timer=null,st=null,id=null,live=false;
+    const dayAt=(x,y)=>{const t=document.elementFromPoint(x,y);const c=t&&t.closest?t.closest('[data-day]'):null;return c?c.getAttribute('data-day'):null;};
+    const stop=()=>{clearTimeout(timer);timer=null;st=null;id=null;live=false;};
+    const ts=ev=>{
+      const t=ev.touches[0];const chip=ev.target.closest&&ev.target.closest('[data-ev]');
+      if(!chip){stop();return;}
+      id=chip.getAttribute('data-ev');st={x:t.clientX,y:t.clientY};live=false;
+      timer=setTimeout(()=>{live=true;
+        setCarry({id,title:chip.getAttribute('data-title')||'',x:st.x,y:st.y});
+        if(navigator.vibrate)try{navigator.vibrate(14);}catch(_){}
+      },420);
+    };
+    const tm=ev=>{
+      const t=ev.touches[0];if(!t)return;
+      if(!live){if(st&&Math.hypot(t.clientX-st.x,t.clientY-st.y)>8)stop();return;}
+      ev.preventDefault();
+      setCarry(c=>c?{...c,x:t.clientX,y:t.clientY}:c);
+      setOver(dayAt(t.clientX,t.clientY));
+    };
+    const te=ev=>{
+      if(live){
+        const t=ev.changedTouches&&ev.changedTouches[0];const d=t?dayAt(t.clientX,t.clientY):null;
+        if(d&&id)CR.current.move(id,{date:d});
+        CR.current.until=Date.now()+450;                    /* 손을 뗀 직후의 클릭은 무시 */
+        ev.preventDefault();
+      }
+      stop();setCarry(null);setOver(null);
+    };
+    el.addEventListener('touchstart',ts,{passive:true});
+    el.addEventListener('touchmove',tm,{passive:false});
+    el.addEventListener('touchend',te);el.addEventListener('touchcancel',te);
+    return()=>{clearTimeout(timer);el.removeEventListener('touchstart',ts);el.removeEventListener('touchmove',tm);
+      el.removeEventListener('touchend',te);el.removeEventListener('touchcancel',te);};
+  },[]);
+  const quiet=()=>Date.now()<(CR.current.until||0);
+  const openEv=e=>{if(!quiet())onOpen(e);};
+  const newAt=d=>{if(!quiet())onNew(d);};
+  return <div ref={gridRef} style={{border:'1px solid var(--border-strong)',position:'relative'}}>
+    {carry&&<div style={{position:'fixed',left:carry.x,top:carry.y-34,transform:'translateX(-50%)',zIndex:200,pointerEvents:'none',
+      background:'var(--wb-ink)',color:'#fff',borderRadius:6,padding:'4px 10px',fontSize:12,fontWeight:600,
+      maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',boxShadow:'0 3px 10px rgba(0,0,0,.3)'}}>
+      📅 {carry.title||'일정'}</div>}
     <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))',borderBottom:'1.3px solid var(--border-table-head)'}}>{['일','월','화','수','목','금','토'].map((d,i)=><div key={d} style={{padding:'5px 0',textAlign:'center',fontSize:'var(--fs-sm2)',fontWeight:700,color:i===0?'var(--color-danger)':i===6?'var(--color-accent)':'var(--text-body)'}}>{d}</div>)}</div>
     <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))'}}>{days.map((d,i)=>{
       const inM=d.slice(0,7)===ms.slice(0,7);const dow=i%7;const hol=holidayOf(d);
       const es=occ.filter(e=>e.date===d);const sts=stones.filter(s=>s.m.date===d);
       const items=es.length+sts.length;
       const dcol=hol||dow===0?'var(--color-danger)':dow===6?'var(--color-accent)':'var(--text-body)';
-      return <div key={d} onClick={()=>onNew(d)} onDragOver={ev=>{ev.preventDefault();setOver(d);}} onDragLeave={()=>setOver(o=>o===d?null:o)} onDrop={drop(d)}
+      return <div key={d} data-day={d} onClick={()=>newAt(d)} onDragOver={ev=>{ev.preventDefault();setOver(d);}} onDragLeave={()=>setOver(o=>o===d?null:o)} onDrop={drop(d)}
         style={{minHeight:96,padding:'4px 5px',borderRight:dow<6?'1px solid var(--border-default)':'none',borderBottom:i<35?'1px solid var(--border-default)':'none',
           background:over===d?'var(--surface-link-cell)':inM?(d===today?'var(--surface-input-cell)':hol?'var(--color-danger-surface)':'#fff'):'var(--surface-hover)',cursor:'pointer',overflow:'hidden'}}>
         <div style={{display:'flex',alignItems:'baseline',gap:4,marginBottom:3}}>
@@ -37687,11 +37811,11 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove}){
           {d===today&&<span style={{fontSize:10,marginLeft:'auto',color:'var(--color-accent)'}}>오늘</span>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:2}}>
-          {es.slice(0,3).map((e,j)=><EvChip key={e.id+j} e={e} onClick={onOpen} compact draggable={e.repeat==='none'} onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';}}/>)}
+          {es.slice(0,3).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id} onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';}}/>)}
           {sts.slice(0,Math.max(0,4-Math.min(es.length,3))).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={onOpen} compact/>)}
           {items>4&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-4}</span>}
         </div></div>;})}</div>
-    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>일정을 다른 날짜로 끌어 옮길 수 있습니다 · ◆ 마일스톤 · 반복 일정(↻)은 이동 불가</div>
+    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>{mobile?'일정을 꾹 눌렀다가 끌면 다른 날짜로 옮깁니다':'일정을 다른 날짜로 끌어 옮길 수 있습니다'} · ◆ 마일스톤 · 반복 일정(↻)은 이동 불가</div>
   </div>;
 }
 
@@ -38990,16 +39114,84 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
         if(window.confirm('연결을 끊을까요?\n\n'+a.title+' → '+b.title))onUnlink(e.from,e.to);}}
     S.current.mode=null;S.current.node=null;S.current.from=null;setTick(t=>t+1);};
   const onDbl=ev=>{const [cx,cy]=pos(ev);const id=hitNode(cx,cy);if(id)onOpen(id);};
+  /* ── 손가락 ──
+     한 손가락: 배경이면 돌리기, 공 위면 그 공 끌기, 안 움직이고 떼면 고르기
+     두 손가락: 오므리면 축소·벌리면 확대, 함께 움직이면 이동 */
+  const PZ=React.useRef({d:0,cx:0,cy:0});
+  const tpos=t=>{const r=cvRef.current.getBoundingClientRect();return [t.clientX-r.left,t.clientY-r.top];};
+  const twoOf=ev=>{const a=ev.touches[0],b=ev.touches[1];
+    return {d:Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY),cx:(a.clientX+b.clientX)/2,cy:(a.clientY+b.clientY)/2};};
+  const TH=React.useRef({});
+  TH.current={
+    start(ev){
+      if(ev.touches.length>=2){S.current.mode='pinch';PZ.current=twoOf(ev);return;}
+      const [cx,cy]=tpos(ev.touches[0]);const id=hitNode(cx,cy);
+      S.current.moved=false;S.current.mx=cx;S.current.my=cy;
+      if(id){S.current.mode='node';S.current.node=id;const p=P.current[id];if(p){p.fx=p.x;p.fy=p.y;p.fz=p.z;}}
+      else S.current.mode='orbit';
+    },
+    move(ev){
+      ev.preventDefault();
+      if(S.current.mode==='pinch'){
+        if(ev.touches.length<2)return;
+        const n=twoOf(ev);const o=PZ.current;
+        if(o.d>0&&n.d>0)CAM.current.dist=Math.max(G3.minDist,Math.min(G3.maxDist,CAM.current.dist*o.d/n.d));
+        CAM.current.px+=n.cx-o.cx;CAM.current.py+=n.cy-o.cy;
+        PZ.current=n;FIT.current=false;return;
+      }
+      if(!ev.touches.length)return;
+      const [cx,cy]=tpos(ev.touches[0]);const dx=cx-S.current.mx,dy=cy-S.current.my;
+      if(Math.abs(dx)>3||Math.abs(dy)>3)S.current.moved=true;
+      if(S.current.mode==='node'){const p=P.current[S.current.node];const sc=SCR.current[S.current.node];
+        if(p){const [wx,wy,wz]=dragTo3D(dx,dy,(sc&&sc.k)||1);p.fx+=wx;p.fy+=wy;p.fz+=wz;A.current=Math.max(A.current,.06);}}
+      else if(S.current.mode==='orbit'){CAM.current.yaw+=dx*0.006;
+        CAM.current.pitch=Math.max(-1.45,Math.min(1.45,CAM.current.pitch+dy*0.006));if(R.current.flat)setFlat(false);}
+      S.current.mx=cx;S.current.my=cy;
+    },
+    end(ev){
+      if(ev.touches&&ev.touches.length)return;                    /* 아직 손가락이 남아 있으면 대기 */
+      if(S.current.mode==='node'&&!S.current.moved){const p=P.current[S.current.node];if(p){p.fx=p.fy=p.fz=null;}onPick(S.current.node);}
+      S.current.mode=null;S.current.node=null;setTick(t=>t+1);
+    },
+  };
+  React.useEffect(()=>{
+    const cv=cvRef.current;if(!cv)return;
+    /* 리액트가 붙이는 터치 이벤트는 화면 스크롤을 막을 수 없어서 직접 붙인다 */
+    const st=e=>TH.current.start(e),mv=e=>TH.current.move(e),en=e=>TH.current.end(e);
+    cv.addEventListener('touchstart',st,{passive:true});
+    cv.addEventListener('touchmove',mv,{passive:false});
+    cv.addEventListener('touchend',en);cv.addEventListener('touchcancel',en);
+    return()=>{cv.removeEventListener('touchstart',st);cv.removeEventListener('touchmove',mv);
+      cv.removeEventListener('touchend',en);cv.removeEventListener('touchcancel',en);};
+  },[]);
   const reset=()=>{Object.values(P.current).forEach(p=>{p.fx=p.fy=p.fz=null;});
     CAM.current={yaw:.55,pitch:flat?0:-.3,dist:980,px:0,py:0};A.current=1;FIT.current=true;setTick(t=>t+1);};
 
   const ov={position:'absolute',zIndex:2,display:'flex',gap:6,alignItems:'center'};
-  return <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 5px '+gw+'px',alignItems:'stretch'}}>
+  const mobile=useMobile();
+  return <div style={mobile?{display:'block'}:{display:'grid',gridTemplateColumns:'minmax(0,1fr) 5px '+gw+'px',alignItems:'stretch'}}>
     <div>
       <div style={{position:'relative',border:'1px solid '+G3.border,borderRadius:8,overflow:'hidden',background:G3.frame}}>
         <canvas ref={cvRef} onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
           onDoubleClick={onDbl}
-          style={{width:'100%',height:600,display:'block',cursor:'grab'}}/>
+          style={{width:'100%',height:mobile?'calc(100vh - 215px)':600,minHeight:mobile?380:0,display:'block',cursor:'grab',touchAction:'none'}}/>
+        {mobile&&cur&&<div style={{position:'absolute',left:8,right:8,bottom:8,zIndex:3,background:'rgba(255,255,255,.97)',
+          border:'1px solid var(--border-strong)',borderRadius:10,padding:'10px 12px',boxShadow:'0 4px 16px rgba(0,0,0,.35)',
+          maxHeight:'42%',overflowY:'auto'}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:5}}>
+            <span style={{color:SCOPE_COLOR[cur.scope||'work'],fontSize:11}}>●</span>
+            <b style={{fontSize:'var(--fs-md)',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',flex:1}}>{cur.title}</b>
+            <button type="button" onClick={()=>onPick(null)} aria-label="닫기" style={{border:'none',background:'transparent',fontSize:16,lineHeight:1,color:'var(--text-muted)',cursor:'pointer',padding:'0 2px'}}>✕</button>
+          </div>
+          <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:8}}>
+            연결 {deg[cur.id]||0}개{(cur.tags||[]).length?' · '+cur.tags.slice(0,3).map(t=>'#'+t).join(' '):''}
+          </div>
+          <div style={{fontSize:'var(--fs-sm)',color:'var(--text-body)',lineHeight:1.6,
+            display:'-webkit-box',WebkitLineClamp:4,WebkitBoxOrient:'vertical',overflow:'hidden'}}>
+            {splitRaw(cur.md)[0].replace(/^#.*$/m,'').replace(/[#*>\[\]`]/g,'').trim().slice(0,180)}
+          </div>
+          <div style={{marginTop:8}}><Button size="xs" onClick={()=>onOpen(cur.id)}>노트에서 열기</Button></div>
+        </div>}
         <div style={{...ov,left:12,top:11,gap:10,color:G3.ui,font:'500 11.5px var(--font-sans)',pointerEvents:'none'}}>
           <span style={{fontFamily:'var(--font-num)',fontSize:12.5,color:G3.uiStrong}}>{notes.length}</span> 노트
           <span style={{opacity:.4}}>·</span>
@@ -39018,11 +39210,11 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
         </div>
       </div>
       <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6}}>
-        배경 드래그 = 회전 · 휠 = 확대 · Shift+배경 드래그 = 이동 · 노드 드래그 = 위치 고정(점선 테두리) · <b>Shift+노드 드래그 = 연결</b> · 선 클릭 = 연결 해제 · 노드 더블클릭 = 노트 열기
+        {mobile?'한 손가락 = 돌리기 · 공을 끌면 위치 고정 · 두 손가락 = 확대·이동 · 공을 톡 누르면 내용 카드':<>배경 드래그 = 회전 · 휠 = 확대 · Shift+배경 드래그 = 이동 · 노드 드래그 = 위치 고정(점선 테두리) · <b>Shift+노드 드래그 = 연결</b> · 선 클릭 = 연결 해제 · 노드 더블클릭 = 노트 열기</>}
       </div>
     </div>
-    <Splitter onDrag={dx=>setGw(w=>Math.max(260,Math.min(700,w-dx)))} onReset={resetGw}/>
-    <div style={{border:'1px solid var(--border-default)',padding:'12px 14px',overflowY:'auto',maxHeight:640,background:'#fff',minWidth:0}}>
+    {!mobile&&<Splitter onDrag={dx=>setGw(w=>Math.max(260,Math.min(700,w-dx)))} onReset={resetGw}/>}
+    <div style={{display:mobile?'none':'block',border:'1px solid var(--border-default)',padding:'12px 14px',overflowY:'auto',maxHeight:640,background:'#fff',minWidth:0}}>
       {!cur?<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,fontSize:'var(--fs-base)'}}>노드를 클릭하면 노트가 여기에 열립니다</div>
       :<><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8,paddingBottom:8,borderBottom:'1px solid var(--border-default)'}}>
           <b style={{fontSize:'var(--fs-md)',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cur.title}</b>
@@ -39037,7 +39229,9 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.4';
+const APP_VERSION='v5.5';
+const UNDO_MAX=30;
+const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
@@ -39058,6 +39252,32 @@ function MobileNav({sections}){
     </div>)}
   </div>;
 }
+/* 폰 하단 고정 툴바 — 뒤로 · 앞으로 · 영역 전환 */
+function MobileBar({canBack,canFwd,onBack,onFwd,zone,onZone,badges}){
+  const ico={mail:'✉',cal:'📅',kb:'📘'},lab={mail:'메일',cal:'일정',kb:'지식'};
+  const Btn=({on,dis,children,onClick,label})=>
+    <button type="button" disabled={dis} onClick={onClick} aria-label={label}
+      style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',alignItems:'center',gap:1,
+        border:'none',background:'transparent',padding:'7px 0 4px',fontFamily:'inherit',
+        color:dis?'var(--border-strong)':on?'var(--text-body)':'var(--text-muted)',
+        cursor:dis?'default':'pointer',WebkitTapHighlightColor:'transparent'}}>{children}</button>;
+  const T=({children,on})=><span style={{fontSize:10,fontWeight:on?700:500,letterSpacing:'-.02em'}}>{children}</span>;
+  return <div style={{position:'fixed',left:0,right:0,bottom:0,zIndex:60,display:'flex',alignItems:'stretch',
+    background:'rgba(255,255,255,.97)',backdropFilter:'blur(8px)',borderTop:'1px solid var(--border-default)',
+    paddingBottom:'env(safe-area-inset-bottom)',boxShadow:'0 -1px 6px rgba(0,0,0,.05)'}}>
+    <Btn dis={!canBack} onClick={onBack} label="뒤로"><span style={{fontSize:19,lineHeight:1}}>‹</span><T>뒤로</T></Btn>
+    <Btn dis={!canFwd} onClick={onFwd} label="앞으로"><span style={{fontSize:19,lineHeight:1}}>›</span><T>앞으로</T></Btn>
+    {['mail','cal','kb'].map(z=>{const on=zone===z;const n=(badges||{})[z];
+      return <Btn key={z} on={on} onClick={()=>onZone(z)} label={lab[z]}>
+        <span style={{fontSize:16,lineHeight:1,position:'relative'}}>{ico[z]}
+          {n?<span style={{position:'absolute',top:-3,left:12,minWidth:14,height:14,padding:'0 3px',borderRadius:7,
+            background:'var(--color-accent)',color:'#fff',fontSize:9,lineHeight:'14px',fontWeight:700,
+            fontFamily:'var(--font-num)',textAlign:'center'}}>{n>99?'99+':n}</span>:null}</span>
+        <T on={on}>{lab[z]}</T>
+        <span style={{width:16,height:2,borderRadius:1,background:on?'var(--wb-ink)':'transparent'}}/>
+      </Btn>;})}
+  </div>;
+}
 function Shell({user,onLogout}){
   const NS=window.HDWorkbookDesignSystem_ad60e4;const {AppHeader,SessionBar,SessionDivider,ZoneSegment,NavSidebar,Button,Badge,Toast,InfoBar}=NS;
   const [db,setDbRaw]=React.useState(null);const [zone,setZone]=React.useState(localStorage.getItem('pms.zone')||'mail');
@@ -39072,15 +39292,84 @@ function Shell({user,onLogout}){
   /* 항상 "지금 저장된 값"을 기준으로 고친다 — 전사·정돈처럼 오래 걸리는 작업 중에 다른 화면에서 바뀐 내용이 되돌려지지 않도록.
      arr 자리에 함수를 주면 (현재 배열)=>새 배열 로 계산한다 */
   const dbRef=React.useRef(null);
-  const setDb=(kind,arrOrFn)=>{
-    const base=(dbRef.current&&dbRef.current[kind])||[];
-    const arr=typeof arrOrFn==='function'?arrOrFn(base):arrOrFn;
+  /* 실제 반영 — 되돌리기 기록은 남기지 않는다 */
+  const applyDb=(kind,arr)=>{
     dbRef.current={...(dbRef.current||{}),[kind]:arr};
     setDbRaw(d=>({...d,[kind]:arr}));
     setSaved('saving');clearTimeout(timers.current[kind]);
     timers.current[kind]=setTimeout(async()=>{try{await Store.persist(kind,(dbRef.current||{})[kind]||arr);setSaved(new Date().toTimeString().slice(0,8));}catch(e){setSaved('error');toast('⚠ 저장 실패: '+e.message);}},700);
   };
+  /* ── 되돌리기 / 다시하기 ────────────────────────────────
+     저장되는 모든 변경을 "바뀌기 전 / 바뀐 후" 한 쌍으로 최근 UNDO_MAX 단계까지 쌓아 둔다.
+     타자를 칠 때처럼 같은 대상이 짧은 간격으로 여러 번 바뀌면 한 단계로 묶는다 */
+  const hist=React.useRef({past:[],future:[]});const [,bump]=React.useReducer(x=>x+1,0);
+  const setDb=(kind,arrOrFn)=>{
+    const base=(dbRef.current&&dbRef.current[kind])||[];
+    const arr=typeof arrOrFn==='function'?arrOrFn(base):arrOrFn;
+    if(arr!==base){
+      const h=hist.current;const last=h.past[h.past.length-1];const now=Date.now();
+      const burst=last&&last.kind===kind&&last.after===base&&now-last.ts<1200&&last.before.length===arr.length;
+      if(burst){last.after=arr;last.ts=now;}
+      else{h.past.push({kind,before:base,after:arr,ts:now});if(h.past.length>UNDO_MAX)h.past.shift();}
+      h.future=[];bump();
+    }
+    applyDb(kind,arr);
+  };
   React.useEffect(()=>{if(db)dbRef.current=db;},[db]);
+  const step=(e,dir)=>{const n=Math.abs(e.after.length-e.before.length);
+    const what=KIND_LABEL[e.kind]||e.kind;
+    return what+(n?' '+n+'건 '+(e.after.length>e.before.length?'추가':'삭제'):' 수정')+' '+dir;};
+  const undo=()=>{const h=hist.current;const e=h.past.pop();
+    if(!e){toast('되돌릴 작업이 없습니다');return;}
+    h.future.push(e);applyDb(e.kind,e.before);bump();toast('↶ '+step(e,'되돌림'));};
+  const redo=()=>{const h=hist.current;const e=h.future.pop();
+    if(!e){toast('다시 할 작업이 없습니다');return;}
+    h.past.push(e);applyDb(e.kind,e.after);bump();toast('↷ '+step(e,'다시 함'));};
+  /* Ctrl+Z / Ctrl+Y — 글자를 치는 칸 안에서는 브라우저 기본 동작(글자 되돌리기)에 맡긴다 */
+  const ur=React.useRef({undo,redo});ur.current={undo,redo};
+  React.useEffect(()=>{
+    const on=e=>{
+      if(!(e.ctrlKey||e.metaKey))return;
+      const t=e.target||{};const tag=(t.tagName||'').toUpperCase();
+      if(tag==='INPUT'||tag==='TEXTAREA'||t.isContentEditable)return;
+      const k=(e.key||'').toLowerCase();
+      if(k==='z'&&!e.shiftKey){e.preventDefault();ur.current.undo();}
+      else if(k==='y'||(k==='z'&&e.shiftKey)){e.preventDefault();ur.current.redo();}
+    };
+    window.addEventListener('keydown',on);return()=>window.removeEventListener('keydown',on);
+  },[]);
+  const canUndo=hist.current.past.length>0,canRedo=hist.current.future.length>0;
+  /* ── 화면 이동 이력 (폰 하단의 ← →) ─────────────────────
+     "지금 보고 있는 화면"을 짧은 지문으로 만들어, 달라질 때마다 한 칸씩 쌓는다.
+     선택 상자를 켜고 끄는 것 같은 자잘한 변화는 지문에 넣지 않아 이력이 지저분해지지 않는다 */
+  const navSnap=()=>({zone,
+    mail:{acc:mailSt.acc,folder:mailSt.folder,sel:mailSt.sel},
+    cal:{view:calSt.view,sub:calSt.sub,anchor:calSt.anchor},
+    kb:{view:kbSt.view,tag:kbSt.tag,sel:kbSt.sel,mode:kbSt.mode}});
+  const navSig=v=>JSON.stringify([v.zone,v.mail,v.cal,v.kb]);
+  const navH=React.useRef({stack:[],i:-1,want:''});const [,bumpNav]=React.useReducer(x=>x+1,0);
+  React.useEffect(()=>{
+    const h=navH.current;const cur=navSnap();const sig=navSig(cur);
+    if(h.want){if(h.want===sig){h.want='';return;}h.want='';}   /* ←→ 로 옮겨 간 화면은 다시 쌓지 않는다 */
+    const top=h.stack[h.i];
+    if(top&&navSig(top)===sig)return;
+    const now=Date.now();
+    /* 화면이 열리면서 곧바로 스스로 상태를 손보는 경우(달력이 기준 날짜를 잡는 등)가 있어서,
+       0.5초 안에 같은 영역 안에서 또 바뀌면 새 칸을 만들지 않고 마지막 칸을 고쳐 쓴다 */
+    if(top&&top.zone===cur.zone&&now-(top.ts||0)<500){h.stack[h.i]={...cur,ts:now};return;}
+    h.stack=h.stack.slice(0,h.i+1);h.stack.push({...cur,ts:now});
+    if(h.stack.length>60)h.stack.shift();
+    h.i=h.stack.length-1;bumpNav();
+  },[zone,mailSt.acc,mailSt.folder,mailSt.sel,calSt.view,calSt.sub,calSt.anchor,kbSt.view,kbSt.tag,kbSt.sel,kbSt.mode]);
+  const navGo=d=>{
+    const h=navH.current;const j=h.i+d;
+    if(j<0||j>=h.stack.length)return;
+    const v=h.stack[j];h.i=j;h.want=navSig({zone:v.zone,mail:v.mail,cal:v.cal,kb:v.kb});
+    setZone(v.zone);
+    setMailSt(s=>({...s,...v.mail}));setCalSt(s=>({...s,...v.cal}));setKbSt(s=>({...s,...v.kb}));
+    bumpNav();
+  };
+  const canBack=navH.current.i>0,canFwd=navH.current.i<navH.current.stack.length-1;
   /* 휴지통에서 되살리기 — 평소 저장 경로를 그대로 타서 화면과 저장소가 함께 되돌아온다 */
   const restoreItem=(kind,item)=>{if(!item)return;setDb(kind,arr=>arr.some(x=>x.id===item.id)?arr:[...arr,item]);};
   /* 메일·일정 → 노트. 화면은 그대로 두고 노트만 만든다(지식 화면으로 튀지 않게) */
@@ -39097,9 +39386,9 @@ function Shell({user,onLogout}){
   const savedBadge=saved==='saving'?'⏳ 저장 중…':saved==='error'?'⚠ 저장 실패':saved?'✓ 자동저장됨 · '+saved:'✓ 불러옴';
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
     <AppHeader mark="🗂" title="개인 업무 관리" version={APP_VERSION} tools={mobile
-      ?<><Button variant="ghost" size="xs" onClick={()=>setTrash(true)}>🗑</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙</Button><Button variant="ghost" size="xs" onClick={onLogout}>나가기</Button></>
-      :<><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)} title={'지운 항목 보관함('+TRASH_DAYS+'일)'}>🗑 휴지통</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
-    <SessionBar icon="🗂" name={user.name+' 워크스페이스'} right={<ZoneSegment items={ZONES.map(z=>({...z,label:z.label+(z.id==='mail'&&unread?' · '+unread:z.id==='cal'&&todayN?' · '+todayN:'')}))} value={zone} onChange={setZone}/>}>
+      ?<><Button variant="ghost" size="xs" disabled={!canUndo} title="되돌리기" onClick={undo}>↶</Button><Button variant="ghost" size="xs" disabled={!canRedo} title="다시하기" onClick={redo}>↷</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)}>🗑</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙</Button><Button variant="ghost" size="xs" onClick={onLogout}>나가기</Button></>
+      :<><Button variant="ghost" size="xs" disabled={!canUndo} title="되돌리기 (Ctrl+Z)" onClick={undo}>↶ 되돌리기</Button><Button variant="ghost" size="xs" disabled={!canRedo} title="다시하기 (Ctrl+Y)" onClick={redo}>↷ 다시</Button><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)} title={'지운 항목 보관함('+TRASH_DAYS+'일)'}>🗑 휴지통</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
+    <SessionBar icon="🗂" name={mobile?ZONES.filter(z=>z.id===zone).map(z=>z.label)[0]:user.name+' 워크스페이스'} right={mobile?null:<ZoneSegment items={ZONES.map(z=>({...z,label:z.label+(z.id==='mail'&&unread?' · '+unread:z.id==='cal'&&todayN?' · '+todayN:'')}))} value={zone} onChange={setZone}/>}>
       <Badge tone="pill">{mobile?(saved==='saving'?'⏳':saved==='error'?'⚠':'✓'):savedBadge}</Badge>
       {!mobile&&<><SessionDivider/>
       {Store.mode==='supabase'?<Badge tone="linked">☁ Supabase · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill" style={{cursor:'pointer'}} onClick={()=>setCfg(true)}>💾 로컬 저장 · 클릭해 클라우드 연결</Badge>}
@@ -39107,12 +39396,14 @@ function Shell({user,onLogout}){
     </SessionBar>
     <div style={{display:'flex',flexDirection:mobile?'column':'row',alignItems:'stretch',flex:1,minHeight:'calc(100vh - 90px)'}}>
       {mobile?<MobileNav sections={nav}/>:<NavSidebar sections={nav}/>}
-      <main style={{flex:1,minWidth:0,padding:mobile?'10px 10px 24px':'var(--pad-content)'}}>
+      <main style={{flex:1,minWidth:0,padding:mobile?'10px 10px calc(64px + env(safe-area-inset-bottom))':'var(--pad-content)'}}>
         {zone==='mail'&&<MailView db={db} setDb={setDb} st={mailSt} set={merge(setMailSt)} toast={toast} sendToNote={sendToNote} sendManyToNote={sendManyToNote} sendToEvent={sendToEvent} openSettings={()=>setCfg(true)}/>}
         {zone==='cal'&&<CalendarView db={db} setDb={setDb} st={calSt} set={merge(setCalSt)} toast={toast} sendToNote={sendToNote}/>}
         {zone==='kb'&&<KnowledgeView db={db} setDb={setDb} st={kbSt} set={merge(setKbSt)} toast={toast}/>}
       </main>
     </div>
+    {mobile&&<MobileBar canBack={canBack} canFwd={canFwd} onBack={()=>navGo(-1)} onFwd={()=>navGo(1)}
+      zone={zone} onZone={setZone} badges={{mail:unread,cal:todayN}}/>}
     <SettingsModal open={cfgOpen} onClose={()=>setCfg(false)} onToast={toast}/>
     <TrashModal open={trashOpen} onClose={()=>setTrash(false)} onRestore={restoreItem} onToast={toast}/>
     <Toast open={!!toastMsg}>{toastMsg}</Toast>
