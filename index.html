@@ -35872,6 +35872,32 @@ const Store={
     return out;
   },
   /* 저장 — 바뀐 항목만. 지운 항목은 바로 없애지 않고 휴지통(30일)으로 */
+  /* 클라우드에 실제로 무엇이 들어 있는지 그대로 읽어 온다 — 화면과 어긋날 때 원인을 가른다 */
+  async diag(){
+    if(this.mode!=='supabase')return {mode:'local'};
+    const out={mode:this.rowMode?'row':'blob',email:this.user.email,rows:{},saved:{}};
+    try{
+      if(this.rowMode){
+        for(const k of ['mails','notes','events']){
+          const r=await this.sb.from('pms_items').select('item_id',{count:'exact',head:true})
+            .eq('user_id',this.user.id).eq('kind',k).is('deleted_at',null);
+          out.rows[k]=r.error?('오류: '+r.error.message):r.count;
+        }
+        const r2=await this.sb.from('pms_items').select('data,updated_at')
+          .eq('user_id',this.user.id).eq('kind','mails').is('deleted_at',null)
+          .order('updated_at',{ascending:false}).limit(3);
+        out.recent=(r2.data||[]).map(x=>({subject:(x.data||{}).subject||'',saved:x.updated_at}));
+      }else{
+        const r=await this.sb.from('pms_collections').select('kind,data,updated_at').eq('user_id',this.user.id);
+        if(r.error)out.err=explainSbError(r.error);
+        (r.data||[]).forEach(x=>{out.rows[x.kind]=Array.isArray(x.data)?x.data.length:'?';out.saved[x.kind]=x.updated_at;});
+        const ms=((r.data||[]).find(x=>x.kind==='mails')||{}).data||[];
+        out.recent=ms.slice().sort((a,b)=>String(b.date||'').localeCompare(String(a.date||''))).slice(0,3)
+          .map(m=>({subject:m.subject||'',saved:m.date||''}));
+      }
+    }catch(e){out.err=e.message;}
+    return out;
+  },
   async persist(kind,arr){
     const prev=this.snap[kind]||new Map();
     const next=new Map((arr||[]).map(x=>[x.id,JSON.stringify(x)]));
@@ -35882,7 +35908,21 @@ const Store={
       if(gone.length){const {error}=await this.sb.from('pms_items').update({deleted_at:nowStamp()}).eq('user_id',this.user.id).eq('kind',kind).in('item_id',gone);if(error)throw new Error(explainSbError(error));}
     }
     else if(this.mode==='supabase'){
-      const {error}=await this.sb.from('pms_collections').upsert({user_id:this.user.id,kind,data:arr,updated_at:nowStamp()});if(error)throw new Error(explainSbError(error));
+      /* 묶음 저장(옛 방식)은 통째로 덮어쓰므로, 그냥 올리면 다른 기기가 올려 둔 것이 날아간다.
+         서버에만 있는 항목(내가 가진 적도, 지운 적도 없는 것)은 남겨 두고 합쳐서 올린다 */
+      let merged=arr||[];
+      try{
+        const r=await this.sb.from('pms_collections').select('data').eq('user_id',this.user.id).eq('kind',kind).maybeSingle();
+        const remote=Array.isArray(r.data&&r.data.data)?r.data.data:[];
+        if(remote.length){
+          const goneSet=new Set(gone);const mine=new Map((arr||[]).map(x=>[x.id,x]));let add=0;
+          remote.forEach(x=>{if(!x||!x.id)return;
+            if(mine.has(x.id)||goneSet.has(x.id)||prev.has(x.id))return;   /* 내가 지운 것은 되살리지 않는다 */
+            mine.set(x.id,x);add++;});
+          if(add)merged=[...mine.values()];
+        }
+      }catch(_){}
+      const {error}=await this.sb.from('pms_collections').upsert({user_id:this.user.id,kind,data:merged,updated_at:nowStamp()});if(error)throw new Error(explainSbError(error));
       if(gone.length)this.localTrash(kind,gone.map(id=>JSON.parse(prev.get(id))));
     }
     else{
@@ -36805,6 +36845,7 @@ function RowModeSection({onToast}){
       {r&&<Badge tone={r.ok?'linked':'muted'}>{r.ok?'행 단위':'묶음'}</Badge>}
       <span style={{marginLeft:'auto'}}><Button variant="ghost" size="xs" disabled={busy} onClick={check}>{busy?'확인 중…':'다시 확인'}</Button></span>
     </div>
+    {r&&!r.ok&&<InfoBar tone="warn"><b>여러 기기를 함께 쓰신다면 지금 바꾸셔야 합니다.</b> 묶음 저장은 목록 전체를 통째로 덮어쓰기 때문에, 나중에 저장한 기기가 앞선 기기가 올린 메일을 지워 버립니다.</InfoBar>}
     <InfoBar>지금까지는 노트 하나만 고쳐도 <b>그 종류 전체</b>를 다시 올렸습니다. 아래 SQL을 한 번 실행하면 <b>바뀐 항목 한 건만</b> 저장되어 노트·메일이 수천 건이 되어도 느려지지 않고, 지운 항목은 30일간 휴지통에 남습니다. 기존 데이터는 처음 열 때 자동으로 옮겨집니다.</InfoBar>
     {r&&<div style={{fontSize:'var(--fs-sm)',color:r.ok?'var(--color-success)':'var(--text-muted)',margin:'6px 0'}}>{r.ok?'✓ ':'· '}{r.msg}</div>}
     <pre style={{font:'11px/1.45 var(--font-mono)',background:'var(--surface-hover)',border:'1px solid var(--border-default)',padding:'8px 10px',borderRadius:4,maxHeight:170,overflow:'auto',margin:0,whiteSpace:'pre-wrap'}}>{ITEMS_SQL}</pre>
@@ -36977,6 +37018,7 @@ function SettingsModal({open,onClose,onToast}){
       <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',margin:'4px 0'}}>테이블 생성 SQL (SQL Editor에서 1회 실행)</div>
       <pre style={{font:'11px/1.45 var(--font-mono)',background:'var(--surface-hover)',border:'1px solid var(--border-default)',padding:'8px 10px',borderRadius:4,maxHeight:150,overflow:'auto',margin:0,whiteSpace:'pre-wrap'}}>{SUPABASE_SQL}</pre>
       <div style={{marginTop:6}}><Button variant="ghost" size="sm" onClick={()=>{navigator.clipboard.writeText(SUPABASE_SQL);onToast&&onToast('SQL 복사됨');}}>📋 SQL 복사</Button></div>
+      <CloudDiag onToast={onToast}/>
       <RowModeSection onToast={onToast}/>
       <FilesSection onToast={onToast}/>
     </>}
@@ -37030,6 +37072,45 @@ function SettingsModal({open,onClose,onToast}){
   </Modal>;
 }
 
+/* 클라우드에 실제로 무엇이 들어 있는지 보여 준다 — 기기마다 건수가 다를 때 원인을 가른다 */
+function CloudDiag({onToast}){
+  const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [r,setR]=React.useState(null);const [busy,setBusy]=React.useState(false);
+  const run=async()=>{setBusy(true);try{setR(await Store.diag());}catch(e){setR({err:e.message});}setBusy(false);};
+  return <div style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border-default)'}}>
+    <div style={{font:'var(--type-card-title)',marginBottom:6}}>클라우드 점검</div>
+    <div style={{display:'flex',gap:8,alignItems:'center',marginBottom:8}}>
+      <Button variant="gray" size="sm" icon="🔎" disabled={busy} onClick={run}>{busy?'읽는 중…':'클라우드에 저장된 내용 보기'}</Button>
+      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>기기마다 건수가 다를 때 눌러 보세요</span>
+    </div>
+    {r&&<div style={{border:'1px solid var(--border-default)',borderRadius:4,padding:'10px 12px',fontSize:'var(--fs-base)',background:'var(--surface-hover)'}}>
+      {r.err&&<InfoBar tone="warn">{r.err}</InfoBar>}
+      {r.mode==='local'&&<div>로컬 모드입니다 — 이 브라우저에만 저장됩니다.</div>}
+      {r.mode&&r.mode!=='local'&&<>
+        <div style={{marginBottom:6}}>
+          저장 방식 <Badge tone={r.mode==='row'?'linked':'warn'}>{r.mode==='row'?'행 단위 (권장)':'묶음 저장 (옛 방식)'}</Badge>
+          <span style={{marginLeft:8,color:'var(--text-muted)'}}>{r.email}</span>
+        </div>
+        {r.mode==='blob'&&<InfoBar tone="warn">
+          옛 방식은 <b>목록 전체를 통째로 덮어씁니다</b>. 여러 기기를 함께 쓰면 나중에 저장한 기기가 앞선 기기의 내용을 지워 버립니다.
+          Supabase에서 <code>pms_items</code> 테이블을 만들면 행 단위로 바뀌어 이 문제가 사라집니다 — 가이드 07.
+        </InfoBar>}
+        <div style={{display:'grid',gridTemplateColumns:'90px 1fr',rowGap:3,marginTop:6}}>
+          {['mails','notes','events'].map(k=><React.Fragment key={k}>
+            <span style={{color:'var(--text-label)'}}>{k==='mails'?'메일':k==='notes'?'노트':'일정'}</span>
+            <span style={{fontFamily:'var(--font-num)',fontWeight:700}}>{r.rows&&r.rows[k]!==undefined?r.rows[k]:'–'}
+              {r.saved&&r.saved[k]&&<span style={{fontFamily:'var(--font-sans)',fontWeight:400,color:'var(--text-muted)',marginLeft:8}}>저장 {String(r.saved[k]).slice(0,19).replace('T',' ')}</span>}</span>
+          </React.Fragment>)}
+        </div>
+        {(r.recent||[]).length>0&&<div style={{marginTop:8,paddingTop:8,borderTop:'1px solid var(--border-default)'}}>
+          <div style={{color:'var(--text-label)',marginBottom:3}}>클라우드에 있는 최근 메일</div>
+          {r.recent.map((m,i)=><div key={i} style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+            · {m.subject||'(제목 없음)'} <span style={{color:'var(--text-muted)'}}>{String(m.saved||'').slice(0,19).replace('T',' ')}</span></div>)}
+        </div>}
+      </>}
+    </div>}
+  </div>;
+}
 function NotiTab({c,setC,onToast}){
   const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const [st,setSt]=React.useState(()=>Notify.state());
@@ -39745,7 +39826,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v6.8';
+const APP_VERSION='v6.9';
 /* ── 새 버전 확인 ─────────────────────────────────────
    홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
    그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
