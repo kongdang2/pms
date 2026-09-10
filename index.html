@@ -37491,7 +37491,10 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     }
     setBlkN(Blocked.list().length);
     const dup=read-added-blk;
-    toast('파일 '+read+'개 읽음 · 새 메일 '+added+'건'+(blk?' · 차단 '+blk+'건':'')+(dup>0?' · '+dup+'개는 이미 있는 메일':''));
+    /* 처음부터 다시 읽은 뒤에는 예전에 두 벌로 들어와 있던 메일까지 함께 정리한다 */
+    const merged=all?dedupeMails():0;
+    toast('파일 '+read+'개 읽음 · 새 메일 '+added+'건'+(blk?' · 차단 '+blk+'건':'')
+      +(dup>0?' · '+dup+'개는 이미 있는 메일':'')+(merged?' · 중복 '+merged+'건 합침':''));
   };
   /* 「동기화」 하나로: 회사 메일 폴더를 읽고, 이어서 Gmail 을 가져온다 */
   const syncEverything=async()=>{
@@ -37501,7 +37504,10 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       if(folderOk==='ok'||folderOk==='need')await pullAll(false);
       await syncAll(true);
       const gm=db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected');
-      if(folderOk==='none'&&!gm)toast('가져올 곳이 없습니다 — ⚙ 설정 › 메일 연동에서 폴더나 Gmail 을 먼저 이어 주세요');
+      if(folderOk==='none'&&!gm){toast('가져올 곳이 없습니다 — ⚙ 설정 › 메일 연동에서 폴더나 Gmail 을 먼저 이어 주세요');return;}
+      /* 마무리로 중복까지 정리 — 목록 한 번 훑는 정도라 부담이 없다 */
+      const merged=dedupeMails();
+      if(merged)toast('🧹 두 벌로 들어와 있던 메일 '+merged+'건을 합쳤습니다');
     }finally{setBusy('');checkFolder();}
   };
   const pf=React.useRef(pullFolder);pf.current=pullFolder;
@@ -37560,19 +37566,24 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     return addN+fillN;
   };
   /* 같은 메일이 두 벌 들어온 경우 합치기 — 본문·주소가 있는 쪽을 남긴다 */
+  /* 지금 저장된 목록을 기준으로 계산한다 — 방금 끝난 가져오기 결과까지 반영되도록 */
   const dedupeMails=()=>{
-    const seen=new Map();const out=[];let gone=0;
-    const reg=m=>mailKeys(m).forEach(k=>seen.set(k,m));
-    db.mails.forEach(m=>{
-      let ex=null;for(const k of mailKeys(m)){if(seen.has(k)){ex=seen.get(k);break;}}
-      if(!ex){reg(m);out.push(m);return;}
-      gone++;
-      const merged={...mergeMail(ex,m),id:ex.id};
-      const i=out.indexOf(ex);if(i>=0)out[i]=merged;
-      reg(merged);
+    let gone=0;
+    setDb('mails',prev=>{
+      const seen=new Map();const out=[];
+      const reg=m=>mailKeys(m).forEach(k=>seen.set(k,m));
+      prev.forEach(m=>{
+        let ex=null;for(const k of mailKeys(m)){if(seen.has(k)){ex=seen.get(k);break;}}
+        if(!ex){reg(m);out.push(m);return;}
+        gone++;
+        const merged={...mergeMail(ex,m),id:ex.id};
+        const i=out.indexOf(ex);if(i>=0)out[i]=merged;
+        reg(merged);
+      });
+      return gone?out:prev;
     });
-    if(!gone){toast('중복 없음');return;}
-    setDb('mails',out);set({sel:null,picked:[]});toast(gone+'건 합침');
+    if(gone)set({sel:null,picked:[]});
+    return gone;
   };
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
@@ -37580,8 +37591,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button>
         <Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} title="회사 메일 폴더와 Gmail 을 한 번에 확인합니다" onClick={syncEverything}>{busy==='sync'?'동기화 중…':'동기화'}</Button>
         <MenuButton icon="⋯" label="더보기" title="자주 쓰지 않는 가져오기 동작" items={[
-          {label:'↻ 폴더를 처음부터 다시 읽기',sub:'회사 메일 .eml 을 전부 다시 — 중복은 자동으로 걸러집니다',onClick:()=>pullAll(true)},
-          {label:'🧹 중복 정리',sub:'같은 메일이 두 벌 들어온 것을 합칩니다',onClick:dedupeMails},
+          {label:'↻ 폴더를 처음부터 다시 읽기',sub:'회사 메일 .eml 을 전부 다시 읽고, 두 벌로 들어와 있던 메일도 함께 합칩니다',onClick:()=>pullAll(true)},
           {sep:true},
           {label:'📥 파일에서 가져오기',sub:'.eml 파일을 직접 올립니다',onClick:()=>set({importOpen:true})},
         ]}/>
@@ -39484,7 +39494,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.9';
+const APP_VERSION='v6.0';
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
