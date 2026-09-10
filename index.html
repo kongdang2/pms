@@ -36260,7 +36260,25 @@ const Notify={
     }catch(_){return null;}
   },
 };
-Object.assign(window,{Notify,MenuButton,usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
+/* ── 백그라운드 유지 ──────────────────────────────────
+   크롬은 한동안 보이지 않은 탭을 "얼려" 타이머를 아예 멈춘다. 그러면 자동 동기화도 함께 멈춘다.
+   소리를 내고 있는 탭은 얼리지 않으므로, 사람이 들을 수 없을 만큼 작은 소리를 아주 조용히 틀어 둔다.
+   (재생은 사용자가 켤 때의 클릭을 근거로 시작되므로 브라우저 자동재생 정책에도 걸리지 않는다) */
+const SILENT_WAV='data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+const KeepAwake={
+  el:null,
+  on(){
+    if(this.el)return Promise.resolve(true);
+    const a=document.createElement('audio');
+    a.loop=true;a.volume=0.0001;a.src=SILENT_WAV;a.setAttribute('aria-hidden','true');
+    a.style.display='none';document.body.appendChild(a);
+    this.el=a;
+    return a.play().then(()=>true).catch(()=>{this.off();return false;});
+  },
+  off(){if(this.el){try{this.el.pause();this.el.remove();}catch(_){}}this.el=null;},
+  get running(){return !!(this.el&&!this.el.paused);},
+};
+Object.assign(window,{KeepAwake,Notify,MenuButton,usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
 </script>
 <script type="text/babel">/* ── 첨부 파일(이미지·PDF) ─────────────────────────────────────────
    클라우드 모드 → Supabase Storage 버킷 'pms-files' (비공개, 본인 폴더만 접근)
@@ -37062,6 +37080,7 @@ function SettingsModal({open,onClose,onToast}){
         <Select style={{width:'100%'}} value={String(c.mailAuto||0)} onChange={v=>setC({...c,mailAuto:+v})}
           options={[{id:'0',label:'끄기 — 🔄 단추를 눌렀을 때만'},{id:'1',label:'1분마다'},{id:'5',label:'5분마다 (권장)'},{id:'15',label:'15분마다'},{id:'30',label:'30분마다'},{id:'60',label:'1시간마다'}]}/>
       </Field>
+      <KeepAwakeRow onToast={onToast}/>
       <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',margin:'-4px 0 8px'}}>
         Gmail이 <b>연결된 상태</b>에서, 이 앱 탭이 열려 있는 동안만 돕니다. 새 메일이 있을 때만 알림이 뜹니다. Gmail API 무료 한도는 넉넉하지만 배터리를 아끼려면 5분 이상을 권합니다.
       </div>
@@ -37109,6 +37128,30 @@ function CloudDiag({onToast}){
         </div>}
       </>}
     </div>}
+  </div>;
+}
+/* 배경 탭이 얼지 않도록 유지 */
+function KeepAwakeRow({onToast}){
+  const {Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+  const [on,setOn]=React.useState(()=>KeepAwake.running);
+  const toggle=async()=>{
+    if(on){KeepAwake.off();setOn(false);try{localStorage.setItem('pms.keepawake','0');}catch(_){}onToast&&onToast('배경 유지 끔');return;}
+    const ok=await KeepAwake.on();
+    setOn(!!ok);
+    try{localStorage.setItem('pms.keepawake',ok?'1':'0');}catch(_){}
+    onToast&&onToast(ok?'배경에서도 계속 돕니다':'⚠ 브라우저가 막았습니다 — 다시 눌러 보세요');
+  };
+  return <div style={{margin:'8px 0 10px',padding:'9px 11px',border:'1px solid var(--border-default)',borderRadius:4}}>
+    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+      <span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>탭이 배경에 있어도 계속 돌리기</span>
+      <Badge tone={on?'linked':'muted'}>{on?'켜짐':'꺼짐'}</Badge>
+      <span style={{marginLeft:'auto'}}><Button variant={on?'gray':'classic'} size="sm" onClick={toggle}>{on?'끄기':'켜기'}</Button></span>
+    </div>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:5,lineHeight:1.6}}>
+      크롬은 한동안 보지 않은 탭을 <b>얼려서</b> 자동 동기화까지 멈춥니다(탭 고정으로는 막지 못합니다).
+      이 스위치를 켜면 <b>사람이 들을 수 없는 아주 작은 소리</b>를 틀어 두어 크롬이 탭을 얼리지 않게 합니다. 소리는 들리지 않고, 탭에 스피커 표시만 붙습니다.
+    </div>
+    {!on&&<InfoBar>더 확실한 방법: 크롬 주소창에 <code>chrome://settings/performance</code> → <b>항상 활성 상태로 유지할 사이트</b> 에 이 앱 주소를 추가하면 스위치 없이도 얼지 않습니다.</InfoBar>}
   </div>;
 }
 function NotiTab({c,setC,onToast}){
@@ -37709,15 +37752,21 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     window.addEventListener('pms:open-accounts',on);return()=>window.removeEventListener('pms:open-accounts',on);},[]);
   React.useEffect(()=>{
     if(!auto)return;
-    let live=true,running=false;
-    const tick=async()=>{if(!live||running)return;running=true;
+    let live=true,running=false,last=0;
+    const run=async()=>{if(!live||running)return;running=true;last=Date.now();
       try{await qs.current(!document.hidden);}finally{running=false;
         if(live){setLastRun(Date.now());MailFolder.state().then(v=>{if(live)setFstat(v);}).catch(()=>{});}}};
-    const t=setInterval(tick,auto*60000);
-    const onShow=()=>{if(!document.hidden)tick();};
+    /* 배경 탭에서는 브라우저가 타이머를 늦추거나 건너뛴다.
+       그래서 짧게 자주 깨어나되 "주기가 지났는지"를 시각으로 따져서 실행한다 —
+       한참 멈춰 있다가 깨어나도 곧바로 한 번 돈다 */
+    const due=()=>{if(Date.now()-last>=auto*60000)run();};
+    const t=setInterval(due,20000);
+    const onShow=()=>{if(!document.hidden)due();};
     document.addEventListener('visibilitychange',onShow);
-    const first=setTimeout(tick,2500);   /* 화면을 연 직후 한 번 */
-    return()=>{live=false;clearInterval(t);clearTimeout(first);document.removeEventListener('visibilitychange',onShow);};
+    window.addEventListener('focus',onShow);
+    const first=setTimeout(run,2500);   /* 화면을 연 직후 한 번 */
+    return()=>{live=false;clearInterval(t);clearTimeout(first);
+      document.removeEventListener('visibilitychange',onShow);window.removeEventListener('focus',onShow);};
   },[auto]);
   /* 배지의 "n분 전"이 흘러가도록 1분마다 다시 그린다 */
   const [,tickUi]=React.useReducer(x=>x+1,0);
@@ -39826,7 +39875,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v6.9';
+const APP_VERSION='v7.0';
 /* ── 새 버전 확인 ─────────────────────────────────────
    홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
    그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
@@ -40072,6 +40121,17 @@ function Shell({user,onLogout}){
       const n=KINDS_COUNT(d);
       toast('☁ 다시 읽었습니다 · 메일 '+n.mails+' · 노트 '+n.notes+' · 일정 '+n.events);
     }catch(e){toast('⚠ 다시 읽기 실패: '+e.message);}
+  },[]);
+  /* 「배경 유지」를 켜 두었다면 다시 열 때도 이어서 — 브라우저가 소리 재생을 막으면
+     사람이 화면을 한 번 누르는 순간 다시 시도한다 */
+  React.useEffect(()=>{
+    let done=false;
+    if(localStorage.getItem('pms.keepawake')!=='1')return;
+    const go=()=>{if(done)return;KeepAwake.on().then(ok=>{if(ok){done=true;off();}});};
+    const off=()=>{window.removeEventListener('pointerdown',go);window.removeEventListener('keydown',go);};
+    go();
+    window.addEventListener('pointerdown',go);window.addEventListener('keydown',go);
+    return off;
   },[]);
   const cp=React.useRef(cloudPull);cp.current=cloudPull;
   React.useEffect(()=>{
