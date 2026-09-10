@@ -39653,7 +39653,41 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v6.4';
+const APP_VERSION='v6.5';
+/* ── 새 버전 확인 ─────────────────────────────────────
+   홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
+   그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
+   파일을 통째로 받지 않고 HEAD 로 꼬리표(ETag·수정시각)만 보므로 데이터가 거의 들지 않는다 */
+function useAppUpdate(){
+  const [fresh,setFresh]=React.useState(false);
+  React.useEffect(()=>{
+    if(!/^https?:$/.test(location.protocol))return;         /* 파일로 연 경우엔 확인할 대상이 없다 */
+    let live=true,base='',timer=null;
+    const stamp=async()=>{
+      try{
+        const r=await fetch(location.pathname+'?_c='+Date.now(),{method:'HEAD',cache:'no-store'});
+        if(!r.ok)return '';
+        return r.headers.get('etag')||r.headers.get('last-modified')||'';
+      }catch(_){return '';}
+    };
+    const tick=async()=>{
+      const cur=await stamp();if(!live||!cur)return;
+      if(!base){base=cur;return;}
+      if(cur!==base)setFresh(true);
+    };
+    tick();
+    timer=setInterval(tick,10*60000);
+    const vis=()=>{if(!document.hidden)tick();};
+    document.addEventListener('visibilitychange',vis);
+    return()=>{live=false;clearInterval(timer);document.removeEventListener('visibilitychange',vis);};
+  },[]);
+  return fresh;
+}
+/* 캐시를 건너뛰고 다시 여는 새로고침 — 주소 뒤에 그때그때 다른 꼬리표를 붙인다 */
+const hardReload=()=>{
+  try{const u=new URL(location.href);u.searchParams.set('v',Date.now().toString(36));location.replace(u.toString());}
+  catch(_){location.reload();}
+};
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
@@ -39708,7 +39742,7 @@ function Shell({user,onLogout}){
   const [db,setDbRaw]=React.useState(null);const [zone,setZone]=React.useState(localStorage.getItem('pms.zone')||'mail');
   const [trashOpen,setTrash]=React.useState(false);const [saved,setSaved]=React.useState('');const [toastMsg,setToastMsg]=React.useState('');const [cfgOpen,setCfg]=React.useState(false);const [err,setErr]=React.useState('');
   const [mailSt,setMailSt]=React.useState({acc:'all',folder:'inbox',sel:null,picked:[]});const [calSt,setCalSt]=React.useState({view:'month',sub:'month',cals:{work:true,personal:true},anchor:todayISO()});const [kbSt,setKbSt]=React.useState({view:'notes',tag:'',scopes:{work:true,personal:true},picked:[],sel:null,mode:'split'});
-  const timers=React.useRef({});const mobile=useMobile();
+  const timers=React.useRef({});const mobile=useMobile();const updated=useAppUpdate();
   React.useEffect(()=>{Store.loadAll().then(d=>{setDbRaw(d);
     if(Store.migrated)setTimeout(()=>toast('로컬 데이터를 클라우드로 이관했습니다'),400);
     else if(Store.rowMigrated)setTimeout(()=>toast('행 단위 저장으로 전환 · '+Store.rowMigrated+'건 이관'),400);}).catch(e=>setErr('데이터 로드 실패: '+e.message+' — 테이블 SQL을 실행했는지 확인하세요'));},[]);
@@ -39811,8 +39845,13 @@ function Shell({user,onLogout}){
   const savedBadge=saved==='saving'?'⏳ 저장 중…':saved==='error'?'⚠ 저장 실패':saved?'✓ 자동저장됨 · '+saved:'✓ 불러옴';
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
     <AppHeader mark="🗂" title="개인 업무 관리" version={APP_VERSION} tools={mobile
-      ?<><Button variant="ghost" size="xs" disabled={!canUndo} title="되돌리기" onClick={undo}>↶</Button><Button variant="ghost" size="xs" disabled={!canRedo} title="다시하기" onClick={redo}>↷</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)}>🗑</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙</Button><Button variant="ghost" size="xs" onClick={onLogout}>나가기</Button></>
-      :<><Button variant="ghost" size="xs" disabled={!canUndo} title="되돌리기 (Ctrl+Z)" onClick={undo}>↶ 되돌리기</Button><Button variant="ghost" size="xs" disabled={!canRedo} title="다시하기 (Ctrl+Y)" onClick={redo}>↷ 다시</Button><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)} title={'지운 항목 보관함('+TRASH_DAYS+'일)'}>🗑 휴지통</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
+      ?<><Button variant="ghost" size="xs" title="새로고침 (최신 화면 받아오기)" onClick={hardReload}>⟳</Button><Button variant="ghost" size="xs" disabled={!canUndo} title="되돌리기" onClick={undo}>↶</Button><Button variant="ghost" size="xs" disabled={!canRedo} title="다시하기" onClick={redo}>↷</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)}>🗑</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙</Button><Button variant="ghost" size="xs" onClick={onLogout}>나가기</Button></>
+      :<><Button variant="ghost" size="xs" title="새로고침 (최신 화면 받아오기)" onClick={hardReload}>⟳ 새로고침</Button><Button variant="ghost" size="xs" disabled={!canUndo} title="되돌리기 (Ctrl+Z)" onClick={undo}>↶ 되돌리기</Button><Button variant="ghost" size="xs" disabled={!canRedo} title="다시하기 (Ctrl+Y)" onClick={redo}>↷ 다시</Button><Button variant="ghost" size="xs" onClick={()=>Store.exportJSON(db)} title="전체 데이터 JSON 백업">💾 백업</Button><Button variant="ghost" size="xs" onClick={()=>setTrash(true)} title={'지운 항목 보관함('+TRASH_DAYS+'일)'}>🗑 휴지통</Button><Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 설정</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>👤 {user.email}</span><Button variant="ghost" size="xs" onClick={onLogout}>로그아웃</Button></>}/>
+    {updated&&<div onClick={hardReload} role="button" style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',
+      padding:'8px 14px',background:'var(--wb-ink)',color:'#fff',fontSize:'var(--fs-md)',fontWeight:600,fontFamily:'var(--font-sans)'}}>
+      <span style={{fontSize:15}}>🔄</span>새 버전이 올라왔습니다
+      <span style={{marginLeft:'auto',border:'1px solid rgba(255,255,255,.55)',borderRadius:6,padding:'3px 12px',fontSize:'var(--fs-sm2)'}}>지금 새로고침</span>
+    </div>}
     <SessionBar icon="🗂" name={mobile?ZONES.filter(z=>z.id===zone).map(z=>z.label)[0]:user.name+' 워크스페이스'} right={mobile?null:<ZoneSegment items={ZONES.map(z=>({...z,label:z.label+(z.id==='mail'&&unread?' · '+unread:z.id==='cal'&&todayN?' · '+todayN:'')}))} value={zone} onChange={setZone}/>}>
       <Badge tone="pill">{mobile?(saved==='saving'?'⏳':saved==='error'?'⚠':'✓'):savedBadge}</Badge>
       {!mobile&&<><SessionDivider/>
