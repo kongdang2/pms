@@ -35735,12 +35735,13 @@ function seedData(){
       {id:uid(),acc:'work',folder:'sent',from:'me@company.co.kr',to:'kim@company.co.kr',subject:'RE: 8월 확정 손익 보고',date:d(-3)+'T17:40:00',body:'8월 확정분 첨부합니다. 차이분석은 별도 보고 예정입니다.',star:false,read:true,tags:['손익추정']}
     ],
     events:[
-      {id:uid(),title:'손익추정 검토 회의',date:t,start:'10:00',end:'11:00',cal:'work',status:'todo',category:'손익추정',milestones:[],repeat:'none',notes:'김부장 요청 건. [[손익추정 프로세스]] 참고'},
-      {id:uid(),title:'주간 팀 미팅',date:t,start:'14:00',end:'14:30',cal:'work',status:'todo',category:'정기회의',milestones:[],repeat:'weekly',notes:''},
-      {id:uid(),title:'9월 기준가격 입력 마감',date:d(2),start:'',end:'',cal:'work',status:'doing',category:'손익추정',milestones:[{id:uid(),date:d(1),title:'시황 자료 취합'},{id:uid(),date:d(2),title:'기준가격 확정'}],repeat:'none',notes:'MOPJ · 두바이 · 환율'},
-      {id:uid(),title:'북한산 등산',date:d(5),start:'07:00',end:'12:00',cal:'personal',status:'todo',category:'취미',milestones:[],repeat:'none',notes:'우이령 코스'},
-      {id:uid(),title:'카드 결제일',date:y+'-'+m+'-25',start:'',end:'',cal:'personal',status:'todo',category:'생활',milestones:[],repeat:'monthly',notes:''},
-      {id:uid(),title:'8월 차이분석 보고서',date:d(-2),start:'',end:'',cal:'work',status:'done',category:'손익추정',milestones:[],repeat:'none',notes:''}
+      {id:uid(),title:'손익추정 검토 회의',date:t,start:'10:00',end:'11:00',cal:'work',status:'todo',category:'손익추정',repeat:'none',notes:'김부장 요청 건. [[손익추정 프로세스]] 참고'},
+      {id:uid(),title:'주간 팀 미팅',date:t,start:'14:00',end:'14:30',cal:'work',status:'todo',category:'정기회의',repeat:'weekly',notes:''},
+      {id:uid(),title:'9월 기준가격 입력 마감',date:d(2),dateEnd:'',start:'',end:'',cal:'work',status:'doing',category:'손익추정',repeat:'none',notes:'MOPJ · 두바이 · 환율'},
+      {id:uid(),title:'사업계획 워크숍',date:d(3),dateEnd:d(6),start:'',end:'',cal:'work',status:'todo',category:'사업계획',repeat:'none',notes:'3박 4일'},
+      {id:uid(),title:'북한산 등산',date:d(5),start:'07:00',end:'12:00',cal:'personal',status:'todo',category:'취미',repeat:'none',notes:'우이령 코스'},
+      {id:uid(),title:'카드 결제일',date:y+'-'+m+'-25',start:'',end:'',cal:'personal',status:'todo',category:'생활',repeat:'monthly',notes:''},
+      {id:uid(),title:'8월 차이분석 보고서',date:d(-2),start:'',end:'',cal:'work',status:'done',category:'손익추정',repeat:'none',notes:''}
     ],
     notes:[
       {id:uid(),title:'홈',scope:'work',tags:['index'],updated:nowStamp(),md:'# 개인 위키\n\n업무와 비업무 지식을 한 곳에 축적합니다. `[[제목]]`으로 노트를 연결하세요.\n\n## 업무\n- [[손익추정 프로세스]]\n- [[기준가격 산정 메모]]\n\n## 비업무\n- [[등산 코스 정리]]\n\n## 규칙\n- 노트 제목은 명사구\n- 출처가 있으면 하단에 `출처:` 표기\n- 미완성은 `#draft` 태그'},
@@ -35752,10 +35753,15 @@ function seedData(){
 }
 
 const KINDS=['accounts','mails','events','notes'];
-/* 구버전 데이터 보정: 노트 folder→scope, 일정 category/milestones, 계정 라벨 정리 */
+/* 구버전 데이터 보정: 노트 folder→scope, 일정 category·기간, 계정 라벨 정리 */
 function migrateDb(db){
   if(Array.isArray(db.notes))db.notes=db.notes.map(n=>n.scope?n:{...n,scope:(n.folder==='개인'||n.folder==='personal')?'personal':'work'});
-  if(Array.isArray(db.events))db.events=db.events.map(e=>({...e,category:e.category||'',milestones:Array.isArray(e.milestones)?e.milestones:[]}));
+  /* 마일스톤은 없앴다 — 남아 있던 값은 비고 아래에 옮겨 두고 필드는 버린다 */
+  if(Array.isArray(db.events))db.events=db.events.map(e=>{
+    const ms=Array.isArray(e.milestones)?e.milestones.filter(m=>m&&m.date):[];
+    const o={...e,category:e.category||'',dateEnd:e.dateEnd||''};
+    if(ms.length)o.notes=(o.notes?o.notes+'\n\n':'')+'## 지난 마일스톤\n'+ms.map(m=>'- '+m.date+' '+(m.title||'')).join('\n');
+    delete o.milestones;return o;});
   if(Array.isArray(db.accounts))db.accounts=db.accounts.map(a=>({...a,label:(a.label||'').replace(/\s*\((Outlook|Gmail|gmail|outlook)\)\s*$/,'').trim()||a.label}));
   return db;
 }
@@ -36100,7 +36106,8 @@ function Markdown({md='',onWiki,onToggleTask,style}){
 
 /* ICS */
 const icsDT=(date,time)=>time?date.replace(/-/g,'')+'T'+time.replace(':','')+'00':date.replace(/-/g,'');
-function toICS(events){const L=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//PMS//KO'];events.forEach(e=>{L.push('BEGIN:VEVENT','UID:'+e.id+'@pms','SUMMARY:'+e.title,(e.start?'DTSTART:':'DTSTART;VALUE=DATE:')+icsDT(e.date,e.start));if(e.end||!e.start)L.push((e.start?'DTEND:':'DTEND;VALUE=DATE:')+(e.start?icsDT(e.date,e.end||e.start):icsDT(shiftDay(e.date,1))));if(e.repeat&&e.repeat!=='none')L.push('RRULE:FREQ='+e.repeat.toUpperCase());if(e.notes)L.push('DESCRIPTION:'+e.notes.replace(/\n/g,'\\n'));L.push('CATEGORIES:'+e.cal,'END:VEVENT');});L.push('END:VCALENDAR');return L.join('\r\n');}
+function toICS(events){const L=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//PMS//KO'];events.forEach(e=>{L.push('BEGIN:VEVENT','UID:'+e.id+'@pms','SUMMARY:'+e.title,(e.start?'DTSTART:':'DTSTART;VALUE=DATE:')+icsDT(e.date,e.start));const last=(e.dateEnd&&e.dateEnd>e.date)?e.dateEnd:e.date;
+  if(e.end||!e.start)L.push((e.start?'DTEND:':'DTEND;VALUE=DATE:')+(e.start?icsDT(last,e.end||e.start):icsDT(shiftDay(last,1))));if(e.repeat&&e.repeat!=='none')L.push('RRULE:FREQ='+e.repeat.toUpperCase());if(e.notes)L.push('DESCRIPTION:'+e.notes.replace(/\n/g,'\\n'));L.push('CATEGORIES:'+e.cal,'END:VEVENT');});L.push('END:VCALENDAR');return L.join('\r\n');}
 function fromICS(text){const out=[];text.replace(/\r?\n[ \t]/g,'').split(/BEGIN:VEVENT/).slice(1).forEach(chunk=>{const g=k=>{const m=new RegExp('^'+k+'[^:]*:(.*)$','m').exec(chunk);return m?m[1].trim():'';};const ds=g('DTSTART'),de=g('DTEND');const fmt=s=>s?s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8):'';const tm=s=>s.length>8?s.slice(9,11)+':'+s.slice(11,13):'';const rr=/FREQ=(\w+)/.exec(g('RRULE'));
   out.push({id:uid(),title:g('SUMMARY')||'(제목 없음)',date:fmt(ds),start:tm(ds),end:tm(de),cal:/personal/i.test(g('CATEGORIES'))?'personal':'work',status:'todo',priority:'mid',repeat:rr?rr[1].toLowerCase():'none',notes:g('DESCRIPTION').replace(/\\n/g,'\n')});});return out.filter(e=>e.date);}
 
@@ -37876,14 +37883,51 @@ function ImportModal({open,accounts,onClose,onImport}){
 }
 Object.assign(window,{MailView,mailNav,AccPick,BlockAddModal,addBlockRule,domainOf,FOLDERS,SkippedModal,BlockedBody,ExcludedBody,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
-<script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
+<script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리(색) · 기간 일정 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
 function calNav(st,set){return [{label:'보기',items:CAL_VIEWS,value:st.view||'month',onChange:v=>set({view:v})}];}
-const emptyEvent=(date)=>({id:uid(),title:'',date:date||todayISO(),start:'',end:'',cal:'work',status:'todo',category:'',milestones:[],repeat:'none',notes:''});
+const emptyEvent=(date)=>({id:uid(),title:'',date:date||todayISO(),dateEnd:'',start:'',end:'',cal:'work',status:'todo',category:'',repeat:'none',notes:''});
+/* ── 카테고리 색 ─────────────────────────────────────
+   카테고리마다 색을 하나씩 정해 두고(설정에 저장), 일정 제목 앞에 작은 꼬리표로 보여 준다.
+   색을 안 고른 카테고리는 이름을 숫자로 바꿔 팔레트에서 자동으로 하나 집는다 — 늘 같은 색이 나온다 */
+const CAT_PALETTE=['#4E82AE','#0A6B3B','#8A5300','#7A3E9D','#B03A48','#2E7D80','#5B6B7A','#9A6B2F','#3F6BB5','#6E8B3D'];
+const catColors=()=>{try{return JSON.parse(Store.cfg.calCatColor||'{}')||{};}catch(_){return {};}};
+const saveCatColor=(cat,color)=>{const m=catColors();if(color)m[cat]=color;else delete m[cat];Store.saveCfg({calCatColor:JSON.stringify(m)});};
+function catColor(cat){
+  if(!cat)return '';
+  const m=catColors();if(m[cat])return m[cat];
+  let h=0;for(let i=0;i<cat.length;i++)h=(h*31+cat.charCodeAt(i))>>>0;
+  return CAT_PALETTE[h%CAT_PALETTE.length];
+}
+/* 제목 앞에 붙는 카테고리 꼬리표 */
+function CatTag({cat,fs}){
+  if(!cat)return null;const c=catColor(cat);
+  return <span title={'카테고리 · '+cat} style={{flex:'0 0 auto',display:'inline-block',maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+    background:c+'22',color:c,border:'1px solid '+c+'55',borderRadius:3,padding:'0 4px',
+    fontSize:Math.max(9,(fs||11)-1.5),fontWeight:700,lineHeight:1.5}}>{cat}</span>;
+}
+/* ── 기간 일정 ───────────────────────────────────────
+   dateEnd 가 있으면 시작일부터 종료일까지 매일 칸에 이어서 보여 준다.
+   첫날/끝날만 모서리를 둥글게 해서 한 덩어리로 보이게 한다 */
+const spanEnd=e=>{const d=e.dateEnd||'';return d&&d>e.date?d:e.date;};
+const spanDays=e=>Math.round((new Date(spanEnd(e)+'T00:00:00')-new Date(e.date+'T00:00:00'))/86400000)+1;
+const isSpan=e=>spanEnd(e)!==e.date;
+function spreadDays(list,fromISO,toISO){
+  const out=[];
+  list.forEach(e=>{
+    const last=spanEnd(e);
+    if(last===e.date){if(e.date>=fromISO&&e.date<=toISO)out.push({...e,_day:e.date,_pos:'one'});return;}
+    let d=e.date,n=0;
+    while(d<=last&&n<400){
+      if(d>=fromISO&&d<=toISO)out.push({...e,_day:d,_pos:d===e.date?'first':d===last?'last':'mid'});
+      d=shiftDay(d,1);n++;
+    }
+  });
+  return out;
+}
 const monthStart=iso=>iso.slice(0,8)+'01';
 const weekStart=iso=>{const d=new Date(iso+'T00:00:00');return shiftDay(iso,-d.getDay());};
-const msList=e=>(e.milestones||[]).filter(m=>m&&m.date).sort((a,b)=>a.date.localeCompare(b.date));
-const nextMs=e=>{const t=todayISO();return msList(e).find(m=>m.date>=t)||msList(e).slice(-1)[0]||null;};
+
 
 /* 회사/개인 체크박스 — 색상 점과 함께 */
 function CalToggle({cals,onChange}){
@@ -37946,24 +37990,24 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   </>;
 }
 
-function EvChip({e,onClick,compact,draggable,onDragStart,onDragEnd,carrying,fs,touch}){
+function EvChip({e,onClick,compact,draggable,onDragStart,onDragEnd,carrying,fs,touch,pos}){
   /* touch=true(폰)면 HTML5 끌기를 끈다 — 안드로이드에서 길게 누르면 브라우저가 제 끌기를 시작하며
      우리 동작을 취소시켜 버린다. 글자 선택과 스크롤 가로채기도 같은 이유로 막는다 */
   return <div draggable={touch?false:draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
     data-ev={draggable?e.id:undefined} data-title={e.title}
-    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:fs||(compact?11:12),color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',
+    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',
+      borderRadius:pos==='mid'?0:pos==='first'?'3px 0 0 3px':pos==='last'?'0 3px 3px 0':3,
+      marginRight:pos==='first'||pos==='mid'?-6:0,marginLeft:pos==='last'||pos==='mid'?-6:0,
+      background:CAL_COLOR[e.cal]+'1f',borderLeft:pos==='mid'||pos==='last'?'none':'2px solid '+CAL_COLOR[e.cal],fontSize:fs||(compact?11:12),color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',
       opacity:carrying?.35:1,outline:carrying?'1px dashed '+CAL_COLOR[e.cal]:'none',
       touchAction:touch&&draggable?'none':undefined,
       WebkitUserSelect:'none',userSelect:'none',WebkitTouchCallout:'none'}}>
-    {e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
-    <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{e.title||'(제목 없음)'}</span>
+    {(!pos||pos==='one'||pos==='first')&&<CatTag cat={e.category} fs={fs||(compact?11:12)}/>}
+    {e.start&&(!pos||pos==='one'||pos==='first')&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
+    <span style={{overflow:'hidden',textOverflow:'ellipsis',opacity:pos==='mid'||pos==='last'?.6:1}}>
+      {(pos==='mid'||pos==='last')?'↳ '+(e.title||''):(e.title||'(제목 없음)')}</span>
     {e.status==='doing'&&<span style={{color:CAL_COLOR[e.cal],fontSize:9}}>◐</span>}
     {e.repeat!=='none'&&<span style={{color:'var(--text-label)'}}>↻</span>}</div>;
-}
-function MsChip({m,e,onClick,compact}){
-  return <div onClick={ev=>{ev.stopPropagation();onClick(e);}} title={'마일스톤 · '+(e.title||'')+' · '+m.title}
-    style={{display:'flex',alignItems:'center',gap:3,padding:'1px 5px',borderRadius:3,border:'1px dashed '+CAL_COLOR[e.cal],fontSize:compact?10.5:11.5,color:'var(--text-muted)',cursor:'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',background:'#fff'}}>
-    <span style={{color:CAL_COLOR[e.cal]}}>◆</span><span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{m.title||'마일스톤'}</span></div>;
 }
 /* 속성 패널의 한 줄. EventPanel 안에 두면 렌더마다 새 컴포넌트가 되어 입력칸이 재마운트된다(포커스 손실) */
 function PRow({icon,label,children,top}){return <div style={{display:'grid',gridTemplateColumns:'110px 1fr',alignItems:top?'start':'center',minHeight:32,borderBottom:'1px solid var(--border-default)',padding:top?'6px 0':0}}><span style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',paddingTop:top?4:0}}><span style={{marginRight:6}} aria-hidden="true">{icon}</span>{label}</span><span style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}>{children}</span></div>;}
@@ -37979,7 +38023,7 @@ function InlineText({value,onSave,placeholder,style}){
 }
 function Badge2({children,c}){return <span style={{fontSize:10.5,padding:'1px 7px',borderRadius:10,border:'1px solid '+(c||'var(--border-default)'),color:c||'var(--text-muted)',fontWeight:500}}>{children}</span>;}
 
-/* 월간: 공휴일 표시 · 일정 드래그로 날짜 이동 · 마일스톤 마커 */
+/* 월간: 공휴일 표시 · 일정 드래그로 날짜 이동 · 여러 날 일정은 이어서 표시 */
 /* ── 집어 옮기기 · 휴지통에 떨궈 지우기 (월간·주간 공용) ──────────────
    폰: 일정을 0.4초쯤 누르면 "집었다"가 되고, 끌면 날짜 칸이 따라 밝아진다.
    화면 아래 휴지통 칸에 떨구면 지우고, 날짜 칸에 떨구면 옮긴다.
@@ -38081,8 +38125,7 @@ function useMouseDrag(onDelete){
 function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
   const ms=monthStart(anchor);const first=new Date(ms+'T00:00:00');const startISO=shiftDay(ms,-first.getDay());
   const days=[...Array(42)].map((_,i)=>shiftDay(startISO,i));
-  const occ=expandEvents(events,days[0],days[41]);
-  const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[41])stones.push({m,e});}));
+  const occ=spreadDays(expandEvents(events,shiftDay(days[0],-370),days[41]),days[0],days[41]);
   const [over,setOver]=React.useState(null);
   const drop=d=>ev=>{ev.preventDefault();setOver(null);const id=ev.dataTransfer.getData('text/pms-event');if(id)onMove(id,{date:d});};
   const mobile=useMobile();const z=mobile?(zoom||2):1;
@@ -38112,8 +38155,8 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
     <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))',borderBottom:'1.3px solid var(--border-table-head)'}}>{['일','월','화','수','목','금','토'].map((d,i)=><div key={d} style={{padding:'5px 0',textAlign:'center',fontSize:'var(--fs-sm2)',fontWeight:700,color:i===0?'var(--color-danger)':i===6?'var(--color-accent)':'var(--text-body)'}}>{d}</div>)}</div>
     <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))'}}>{days.map((d,i)=>{
       const inM=d.slice(0,7)===ms.slice(0,7);const dow=i%7;const hol=holidayOf(d);
-      const es=occ.filter(e=>e.date===d);const sts=stones.filter(s=>s.m.date===d);
-      const items=es.length+sts.length;
+      const es=occ.filter(e=>e._day===d);
+      const items=es.length;
       const dcol=hol||dow===0?'var(--color-danger)':dow===6?'var(--color-accent)':'var(--text-body)';
       return <div key={d} data-day={d} onClick={()=>newAt(d)} onDragOver={ev=>{ev.preventDefault();setOver(d);}} onDragLeave={()=>setOver(o=>o===d?null:o)} onDrop={drop(d)}
         style={{minHeight:cellH,padding:'4px 5px',borderRight:dow<6?'1px solid var(--border-default)':'none',borderBottom:i<35?'1px solid var(--border-default)':'none',
@@ -38124,21 +38167,19 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
           {d===today&&<span style={{fontSize:10,marginLeft:'auto',color:'var(--color-accent)'}}>오늘</span>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:2}}>
-          {es.slice(0,maxShow).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={fs} touch={mobile} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id}
+          {es.slice(0,maxShow).map((e,j)=><EvChip key={e.id+j} e={e} pos={e._pos} onClick={openEv} compact fs={fs} touch={mobile} draggable={e.repeat==='none'&&(e._pos==='one'||e._pos==='first')} carrying={!!carry&&carry.id===e.id}
             onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';md.start();}} onDragEnd={md.end}/>)}
-          {sts.slice(0,Math.max(0,maxShow+1-Math.min(es.length,maxShow))).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={openEv} compact/>)}
-          {items>maxShow+1&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-maxShow-1}</span>}
+          {items>maxShow&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-maxShow}</span>}
         </div></div>;})}</div>
     </div></div>
-    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>{mobile?'일정을 꾹 눌렀다가 끌면 옮기고, 아래 🗑 칸에 놓으면 지웁니다'+(z>1?' · 좌우로 밀어 다른 요일 보기 (1× 는 한 달 전체)':''):'일정을 끌어 다른 날짜로 옮기거나 아래 🗑 칸에 놓아 지웁니다'} · ◆ 마일스톤 · 반복 일정(↻)은 이동 불가</div>
+    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>{mobile?'일정을 꾹 눌렀다가 끌면 옮기고, 아래 🗑 칸에 놓으면 지웁니다'+(z>1?' · 좌우로 밀어 다른 요일 보기 (1× 는 한 달 전체)':''):'일정을 끌어 다른 날짜로 옮기거나 아래 🗑 칸에 놓아 지웁니다'} · 반복 일정(↻)은 이동 불가</div>
   </div>;
 }
 
 function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
   const mobile=useMobile();const z=mobile?(zoom||2):1;
-  const ws=weekStart(anchor);const days=[...Array(7)].map((_,i)=>shiftDay(ws,i));const occ=expandEvents(events,days[0],days[6]);const H0=7,H1=21,PX=Math.round(44*(z>=2?1.5:z>=1.5?1.25:1));
-  const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[6])stones.push({m,e});}));
-  const allDay=d=>occ.filter(e=>e.date===d&&!e.start);
+  const ws=weekStart(anchor);const days=[...Array(7)].map((_,i)=>shiftDay(ws,i));const occ=spreadDays(expandEvents(events,shiftDay(days[0],-370),days[6]),days[0],days[6]);const H0=7,H1=21,PX=Math.round(44*(z>=2?1.5:z>=1.5?1.25:1));
+  const allDay=d=>occ.filter(e=>e._day===d&&!e.start);
   const [over,setOver]=React.useState(null);
   const durOf=e=>{if(!e.start)return 60;const [sh,sm]=e.start.split(':').map(Number);const [eh,em]=(e.end||e.start).split(':').map(Number);return Math.max(30,(eh*60+em)-(sh*60+sm))||60;};
   const fmt=m=>pad2(Math.floor(m/60))+':'+pad2(m%60);
@@ -38189,15 +38230,15 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
         <div style={{fontFamily:'var(--font-num)',fontWeight:700,fontSize:15,color:d===today?'var(--color-accent)':hol?'var(--color-danger)':'var(--text-body)'}}>{dt.getDate()}</div>
         {hol&&<div style={{fontSize:10,color:'var(--color-danger)'}}>{hol.replace(/^대체공휴일\((.*)\)$/,'$1 대체')}</div>}
         <div style={{display:'flex',flexDirection:'column',gap:2,marginTop:3,minHeight:16}}>
-          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={mobile?(z>=1.5?12.5:11.5):11} touch={mobile} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id} onDragStart={dragStart(e)} onDragEnd={md.end}/>)}
-          {stones.filter(s=>s.m.date===d).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={openEv} compact/>)}</div></div>;})}</div>
+          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} pos={e._pos} onClick={openEv} compact fs={mobile?(z>=1.5?12.5:11.5):11} touch={mobile} draggable={e.repeat==='none'&&(e._pos==='one'||e._pos==='first')} carrying={!!carry&&carry.id===e.id} onDragStart={dragStart(e)} onDragEnd={md.end}/>)}
+          </div></div>;})}</div>
     <div style={{display:'grid',gridTemplateColumns:cols,position:'relative'}}>
       <div>{[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,fontFamily:'var(--font-num)',fontSize:11,color:'var(--text-label)',textAlign:'right',paddingRight:6,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}>{pad2(H0+i)}:00</div>)}</div>
       {days.map(d=><div key={d} data-day={d} data-kind="time" onDragOver={allow('t'+d)} onDragLeave={()=>setOver(o=>o==='t'+d?null:o)} onDrop={dropTime(d)}
         onClick={ev=>{if(quietClick())return;const r=ev.currentTarget.getBoundingClientRect();const h=H0+Math.floor((ev.clientY-r.top)/PX);onNew(d,{start:pad2(h)+':00',end:pad2(h+1)+':00'});}}
         style={{position:'relative',borderLeft:'1px solid var(--border-default)',background:over==='t'+d?'var(--surface-link-cell)':d===today?'var(--surface-input-cell)':'#fff'}}>
         {[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}></div>)}
-        {occ.filter(e=>e.date===d&&e.start).map((e,j)=>{const [sh,sm]=e.start.split(':').map(Number);const [eh,em]=(e.end||e.start).split(':').map(Number);const top=((sh-H0)*60+sm)/60*PX;const hgt=Math.max(22,((eh-sh)*60+(em-sm))/60*PX);
+        {occ.filter(e=>e._day===d&&e.start).map((e,j)=>{const [sh,sm]=e.start.split(':').map(Number);const [eh,em]=(e.end||e.start).split(':').map(Number);const top=((sh-H0)*60+sm)/60*PX;const hgt=Math.max(22,((eh-sh)*60+(em-sm))/60*PX);
           return <div key={e.id+j} draggable={mobile?false:e.repeat==='none'} data-ev={e.repeat==='none'?e.id:undefined} data-title={e.title}
             onDragStart={dragStart(e)} onDragEnd={md.end} onClick={ev=>{ev.stopPropagation();openEv(e);}}
             style={{position:'absolute',left:3,right:3,top,height:hgt-2,background:CAL_COLOR[e.cal]+'26',borderLeft:'3px solid '+CAL_COLOR[e.cal],borderRadius:3,padding:'2px 5px',fontSize:mobile?12.5:11.5,overflow:'hidden',cursor:e.repeat==='none'?'grab':'pointer',
@@ -38211,7 +38252,7 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
     <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>{mobile?'꾹 눌렀다가 끌면 옮기고, 아래 🗑 칸에 놓으면 지웁니다':'일정을 다른 날짜·시간으로 끌어 옮기거나 아래 🗑 칸에 놓아 지웁니다'}(30분 단위, 길이 유지) · 맨 위 종일 칸에 놓으면 종일 일정으로 · 반복 일정(↻)은 이동 불가</div>
   </div>;
 }
-/* 목록: 카테고리 · 제목 · 마일스톤 · 날짜 · 상태 · 비고 + 열별 필터 */
+/* 목록: 카테고리 · 제목 · 기간 · 상태 · 비고 + 열별 필터 */
 function ListView({events,categories,st,set,onOpen,onNotes}){
   const {DataTable,Button}=window.HDWorkbookDesignSystem_ad60e4;
   const f=st.lf||{category:'',title:'',ms:'',date:'',status:'',notes:''};
@@ -38220,8 +38261,7 @@ function ListView({events,categories,st,set,onOpen,onNotes}){
   const rows=events.filter(e=>
       (!f.category||(e.category||'')===f.category)
     &&has(e.title,f.title)
-    &&(!f.ms||msList(e).some(m=>has(m.title,f.ms)||m.date.includes(f.ms)))
-    &&(!f.date||e.date.includes(f.date)||msList(e).some(m=>m.date.includes(f.date)))
+    &&(!f.date||e.date.includes(f.date)||(e.dateEnd||'').includes(f.date))
     &&(!f.status||e.status===f.status)
     &&has(e.notes,f.notes))
     .sort((a,b)=>a.date.localeCompare(b.date)||(a.start||'').localeCompare(b.start||''));
@@ -38230,14 +38270,13 @@ function ListView({events,categories,st,set,onOpen,onNotes}){
   const txt=(k,ph)=><input value={f[k]} placeholder={ph||'검색'} onChange={e=>setF({[k]:e.target.value})} style={fin}/>;
   const cols=[
     {key:'category',label:H('카테고리',<select value={f.category} onChange={e=>setF({category:e.target.value})} style={fin}><option value="">전체</option>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select>),width:110,align:'center',
-      render:v=>v?<span style={{fontFamily:'var(--font-sans)',fontSize:11,padding:'1px 7px',borderRadius:10,background:'var(--surface-calc-cell)',color:'var(--text-body)'}}>{v}</span>:<span style={{color:'var(--text-label)'}}>–</span>},
+      render:v=>v?<CatTag cat={v} fs={12}/>:<span style={{color:'var(--text-label)'}}>–</span>},
     {key:'title',label:H('제목',txt('title')),align:'left',
       render:(v,r)=><span onClick={()=>onOpen(r)} style={{cursor:'pointer',fontFamily:'var(--font-sans)',fontWeight:500,textDecoration:r.status==='done'?'line-through':'none',color:r.status==='done'?'var(--text-label)':'var(--text-body)'}}><span style={{display:'inline-block',width:7,height:7,borderRadius:4,background:CAL_COLOR[r.cal],marginRight:6}}></span>{v||'(제목 없음)'}{r.repeat!=='none'&&<span style={{color:'var(--text-label)',marginLeft:4}}>↻</span>}</span>},
-    {key:'milestones',label:H('마일스톤',txt('ms')),width:190,align:'left',
-      render:(v,r)=>{const L=msList(r);if(!L.length)return <span style={{color:'var(--text-label)'}}>–</span>;const n=nextMs(r)||L[0];
-        return <span style={{fontFamily:'var(--font-sans)',fontSize:11.5}} title={L.map(m=>m.date+'  '+m.title).join('\n')}><span style={{color:CAL_COLOR[r.cal]}}>◆</span> {n.title||'마일스톤'}{L.length>1&&<span style={{color:'var(--text-label)'}}> 외 {L.length-1}</span>}</span>;}},
-    {key:'date',label:H('날짜',txt('date','YYYY-MM')),width:120,align:'center',
-      render:(v,r)=><span style={{fontFamily:'var(--font-num)'}}>{v}{r.start?<span style={{color:'var(--text-muted)'}}> {r.start}</span>:''}</span>},
+    {key:'date',label:H('날짜',txt('date','YYYY-MM')),width:150,align:'center',
+      render:(v,r)=><span style={{fontFamily:'var(--font-num)'}}>{v}
+        {isSpan(r)?<span style={{color:'var(--text-muted)'}}> ~ {spanEnd(r).slice(5)} <span style={{fontSize:10}}>({spanDays(r)}일)</span></span>
+          :r.start?<span style={{color:'var(--text-muted)'}}> {r.start}</span>:''}</span>},
     {key:'status',label:H('상태',<select value={f.status} onChange={e=>setF({status:e.target.value})} style={fin}><option value="">전체</option>{STATUS_KEYS.map(s=><option key={s} value={s}>{STATUS_LABEL[s]}</option>)}</select>),width:80,align:'center',
       render:v=><Badge2 c={v==='done'?'var(--color-success)':v==='doing'?'var(--color-accent)':undefined}>{STATUS_LABEL[v]}</Badge2>},
     {key:'notes',label:H('비고',txt('notes')),align:'left',
@@ -38255,45 +38294,67 @@ function ListView({events,categories,st,set,onOpen,onNotes}){
   </div>;
 }
 
-/* 속성 패널: 제목 · 날짜 · 시간 · 캘린더 · 카테고리 · 상태 · 마일스톤 · 반복 · 메모 */
+/* 속성 패널: 제목 · 기간 · 시간 · 캘린더 · 카테고리(색) · 상태 · 반복 · 비고 */
 function EventPanel({ev,categories,onClose,onSave,onDelete,onNote}){
   const {Button}=window.HDWorkbookDesignSystem_ad60e4;
-  const [e,setE]=React.useState(ev);React.useEffect(()=>setE(ev),[ev]);if(!e)return null;
+  const [e,setE]=React.useState(ev);const [pv,setPv]=React.useState('edit');
+  React.useEffect(()=>{setE(ev);setPv('edit');},[ev]);if(!e)return null;
   const f=k=>v=>setE({...e,[k]:v});const isNew=!e.title&&ev&&!ev.title;
-  const stones=e.milestones||[];
-  const setMs=(i,p)=>setE({...e,milestones:stones.map((m,j)=>j===i?{...m,...p}:m)});
-  const addMs=()=>setE({...e,milestones:[...stones,{id:uid(),date:e.date,title:'마일스톤 '+(stones.length+1)}]});
-  const delMs=i=>setE({...e,milestones:stones.filter((_,j)=>j!==i)});
   const bare={border:'none',background:'transparent',fontSize:'var(--fs-base)',fontFamily:'var(--font-sans)',color:'var(--text-body)',padding:'4px 6px',borderRadius:4,outline:'none'};
   return <div style={{position:'fixed',inset:0,zIndex:'var(--z-modal)'}} onClick={onClose}>
     <div onClick={x=>x.stopPropagation()} style={{position:'absolute',top:0,right:0,bottom:0,width:480,maxWidth:'95vw',background:'#fff',boxShadow:'var(--shadow-popover)',borderLeft:'1px solid var(--border-default)',display:'flex',flexDirection:'column',fontFamily:'var(--font-sans)'}}>
       <div style={{display:'flex',gap:6,padding:'10px 14px',borderBottom:'1px solid var(--border-default)',alignItems:'center'}}><Button variant="ghost" size="xs" onClick={onClose}>✕</Button><span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>{isNew?'새 일정':'일정'}</span><span style={{marginLeft:'auto',display:'flex',gap:4}}>{!isNew&&<Button variant="ghost" size="xs" onClick={()=>onNote({subject:e.title,body:e.notes,date:e.date})}>📝 노트로</Button>}{!isNew&&<Button variant="ghost" size="xs" onClick={()=>onDelete(e.id)}>🗑</Button>}</span></div>
       <div style={{padding:'18px 22px',overflowY:'auto',flex:1}}>
         <input autoFocus value={e.title} onChange={x=>f('title')(x.target.value)} placeholder="제목 없음" onKeyDown={x=>x.key==='Enter'&&onSave(e)} style={{...bare,fontSize:22,fontWeight:700,width:'100%',padding:'0 0 12px',marginBottom:6}}/>
-        <PRow icon="📅" label="날짜"><input type="date" value={e.date} onChange={x=>f('date')(x.target.value)} style={bare}/>{holidayOf(e.date)&&<span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)'}}>{holidayOf(e.date)}</span>}</PRow>
+        <PRow icon="📅" label="날짜">
+          <input type="date" value={e.date} onChange={x=>{const v=x.target.value;setE(p=>({...p,date:v,dateEnd:p.dateEnd&&p.dateEnd<v?v:p.dateEnd}));}} style={bare}/>
+          {e.dateEnd
+            ? <><span style={{color:'var(--text-label)'}}>–</span>
+                <input type="date" min={e.date} value={e.dateEnd} onChange={x=>f('dateEnd')(x.target.value)} style={bare}/>
+                <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>{spanDays(e)}일</span>
+                <Button variant="ghost" size="xs" onClick={()=>f('dateEnd')('')}>하루로</Button></>
+            : <Button variant="ghost" size="xs" onClick={()=>f('dateEnd')(shiftDay(e.date,1))}>+ 여러 날</Button>}
+          {holidayOf(e.date)&&<span style={{fontSize:'var(--fs-sm)',color:'var(--color-danger)'}}>{holidayOf(e.date)}</span>}
+        </PRow>
         <PRow icon="🕘" label="시간"><input type="time" value={e.start} onChange={x=>f('start')(x.target.value)} style={bare}/><span style={{color:'var(--text-label)'}}>–</span><input type="time" value={e.end} onChange={x=>f('end')(x.target.value)} style={bare}/>{e.start&&<Button variant="ghost" size="xs" onClick={()=>setE({...e,start:'',end:''})}>종일</Button>}</PRow>
         <PRow icon="📁" label="캘린더">{['work','personal'].map(c=><Chip key={c} on={e.cal===c} color={CAL_COLOR[c]} onClick={()=>f('cal')(c)}>● {CAL_LABEL[c]}</Chip>)}</PRow>
-        <PRow icon="🏷" label="카테고리"><input list="pmsCats" value={e.category||''} onChange={x=>f('category')(x.target.value)} placeholder="예: 손익추정 · 사업계획" style={{...bare,width:'100%',borderBottom:'1px dashed var(--border-strong)'}}/><datalist id="pmsCats">{(categories||[]).map(c=><option key={c} value={c}/>)}</datalist></PRow>
-        <PRow icon="◐" label="상태">{STATUS_KEYS.map(s=><Chip key={s} on={e.status===s} color={s==='done'?'#0a6b3b':s==='doing'?'#4E82AE':undefined} onClick={()=>f('status')(s)}>{STATUS_LABEL[s]}</Chip>)}</PRow>
-        <PRow icon="◆" label="마일스톤" top>
-          <div style={{width:'100%',display:'flex',flexDirection:'column',gap:4}}>
-            {stones.map((m,i)=><div key={m.id||i} style={{display:'grid',gridTemplateColumns:'118px 1fr 24px',gap:4,alignItems:'center'}}>
-              <input type="date" value={m.date||''} onChange={x=>setMs(i,{date:x.target.value})} style={{...inputStyle,padding:'3px 5px',fontSize:11.5}}/>
-              <input value={m.title||''} onChange={x=>setMs(i,{title:x.target.value})} placeholder={'내용 '+(i+1)} style={{...inputStyle,padding:'3px 6px',fontSize:'var(--fs-base)'}}/>
-              <Button variant="ghost" size="xs" onClick={()=>delMs(i)}>✕</Button></div>)}
-            <div><Button variant="gray" size="xs" onClick={addMs}>+ 마일스톤 추가</Button>{stones.length>0&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginLeft:8}}>월간 캘린더에 ◆로 표시됩니다</span>}</div>
+        <PRow icon="🏷" label="카테고리" top>
+          <div style={{width:'100%'}}>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              <input list="pmsCats" value={e.category||''} onChange={x=>f('category')(x.target.value)} placeholder="예: 손익추정 · 사업계획" style={{...bare,flex:1,borderBottom:'1px dashed var(--border-strong)'}}/>
+              <datalist id="pmsCats">{(categories||[]).map(c=><option key={c} value={c}/>)}</datalist>
+              {e.category&&<CatTag cat={e.category} fs={12}/>}
+            </div>
+            {e.category&&<div style={{display:'flex',alignItems:'center',gap:5,marginTop:7,flexWrap:'wrap'}}>
+              {CAT_PALETTE.map(c=><button key={c} type="button" title={c} onClick={()=>{saveCatColor(e.category,c);setE({...e});}}
+                style={{width:18,height:18,borderRadius:4,background:c,cursor:'pointer',
+                  border:catColor(e.category).toLowerCase()===c.toLowerCase()?'2px solid var(--text-body)':'1px solid rgba(0,0,0,.15)'}}/>)}
+              <button type="button" onClick={()=>{saveCatColor(e.category,'');setE({...e});}}
+                style={{border:'1px solid var(--border-strong)',borderRadius:4,background:'#fff',fontSize:11,padding:'1px 7px',cursor:'pointer',fontFamily:'inherit',color:'var(--text-muted)'}}>자동</button>
+              <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>이 카테고리의 모든 일정에 함께 적용됩니다</span>
+            </div>}
           </div>
         </PRow>
+        <PRow icon="◐" label="상태">{STATUS_KEYS.map(s=><Chip key={s} on={e.status===s} color={s==='done'?'#0a6b3b':s==='doing'?'#4E82AE':undefined} onClick={()=>f('status')(s)}>{STATUS_LABEL[s]}</Chip>)}</PRow>
         <PRow icon="↻" label="반복">{[['none','없음'],['daily','매일'],['weekly','매주'],['monthly','매월']].map(([k,l])=><Chip key={k} on={e.repeat===k} onClick={()=>f('repeat')(k)}>{l}</Chip>)}</PRow>
-        <div style={{marginTop:14,fontSize:'var(--fs-sm)',color:'var(--text-label)',marginBottom:4}}>비고 · 마크다운, [[위키링크]] 가능</div>
-        <textarea value={e.notes} onChange={x=>f('notes')(x.target.value)} rows={7} placeholder="내용을 입력하세요" style={{...inputStyle,border:'none',padding:'6px 0',resize:'vertical',lineHeight:1.6,fontSize:'var(--fs-md2)'}}/>
-        {e.notes&&<div style={{borderTop:'1px solid var(--border-default)',paddingTop:8}}><Markdown md={e.notes}/></div>}
+        <div style={{marginTop:14,display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+          <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>비고 · 마크다운, [[위키링크]] 가능</span>
+          {e.notes&&<span style={{marginLeft:'auto',display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
+            {[['edit','편집'],['view','미리보기']].map(([k,l])=><button key={k} type="button" onClick={()=>setPv(k)}
+              style={{border:'none',borderRadius:4,padding:'2px 9px',fontSize:'var(--fs-sm2)',fontFamily:'inherit',
+                fontWeight:pv===k?600:500,background:pv===k?'var(--surface-active)':'transparent',
+                color:pv===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer'}}>{l}</button>)}
+          </span>}
+        </div>
+        {pv==='view'&&e.notes
+          ? <div style={{border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 10px',minHeight:120}}><Markdown md={e.notes}/></div>
+          : <textarea value={e.notes} onChange={x=>f('notes')(x.target.value)} rows={9} placeholder="내용을 입력하세요" style={{...inputStyle,border:'none',padding:'6px 0',resize:'vertical',lineHeight:1.6,fontSize:'var(--fs-md2)'}}/>}
       </div>
       <div style={{padding:'10px 14px',borderTop:'1px solid var(--border-default)',display:'flex',justifyContent:'flex-end',gap:6}}><Button variant="gray" onClick={onClose}>취소</Button><Button variant="primary" icon="💾" onClick={()=>onSave(e)}>저장</Button></div>
     </div>
   </div>;
 }
-Object.assign(window,{CalendarView,calNav,CAL_VIEWS,emptyEvent,msList});
+Object.assign(window,{CalendarView,calNav,CAL_VIEWS,emptyEvent});
 </script>
 <script type="text/babel">/* ── LLM 위키 모드 ────────────────────────────────────────────────
    ① 규칙 노트  — 위키의 문법·정돈 기준. 모든 위키 작업의 system 프롬프트가 된다
@@ -38352,7 +38413,7 @@ function wContext(r){
   r.notes.forEach(n=>parts.push('### 노트: '+n.title+'\n'+cut(splitRaw(n.md)[0],1600)));
   r.mails.forEach(m=>parts.push('### 메일: '+m.subject+'\n보낸 사람: '+m.from+' · 날짜: '+String(m.date).slice(0,16).replace('T',' ')+'\n'+cut(m.body,1100)));
   r.events.forEach(e=>parts.push('### 일정: '+e.title+'\n'+e.date+(e.start?' '+e.start:'')+' · '+(STATUS_LABEL[e.status]||'')+(e.category?' · '+e.category:'')
-    +((e.milestones||[]).length?'\n마일스톤: '+e.milestones.map(m=>m.date+' '+m.title).join(' / '):'')+(e.notes?'\n'+cut(e.notes,600):'')));
+    +(e.dateEnd&&e.dateEnd!==e.date?'\n기간: '+e.date+' ~ '+e.dateEnd:'')+(e.notes?'\n'+cut(e.notes,600):'')));
   return parts.join('\n\n');
 }
 /* ── 물어보기 ── */
@@ -38807,10 +38868,9 @@ function vaultFiles(db,opt){
     files.push({name:uniq('메일/'+d+' '+safeName(m.subject)+'.md'),text});
   });
   if(opt.events)(db.events||[]).forEach(e=>{
-    const ms=(e.milestones||[]).filter(m=>m&&m.date).map(m=>'- '+m.date+' '+(m.title||''));
-    const text=fmBuild({title:e.title,type:'event',date:e.date,start:e.start,end:e.end,
+    const text=fmBuild({title:e.title,type:'event',date:e.date,dateEnd:e.dateEnd||'',start:e.start,end:e.end,
       calendar:e.cal==='personal'?'개인':'회사',status:STATUS_LABEL[e.status]||e.status,category:e.category||''})
-      +'# '+(e.title||'(제목 없음)')+'\n\n'+(ms.length?'## 마일스톤\n'+ms.join('\n')+'\n\n':'')+(e.notes||'');
+      +'# '+(e.title||'(제목 없음)')+'\n\n'+(e.notes||'');
     files.push({name:uniq('일정/'+String(e.date||'').slice(0,7)+' '+safeName(e.title)+'.md'),text});
   });
   return {files,atts};
@@ -39577,7 +39637,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v6.1';
+const APP_VERSION='v6.2';
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
