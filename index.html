@@ -37318,6 +37318,14 @@ const Blocked={
   remove(keys){const k=new Set(keys);this.save(this.list().filter(m=>!k.has(m.file||m.subject)));},
   clear(){try{localStorage.removeItem(BLOCK_KEY);}catch(_){}},
 };
+/* 차단 목록에 규칙을 한 줄 더한다 (이미 있으면 그대로 둔다) */
+function addBlockRule(rule){
+  const cur=String(Store.cfg.mailBlock||'');
+  const has=cur.split(/[\n,;]+/).map(x=>x.trim().toLowerCase()).includes(rule.toLowerCase());
+  if(!has)Store.saveCfg({mailBlock:(cur.trim()?cur.replace(/\s*$/,'')+'\n':'')+rule});
+  return !has;
+}
+const domainOf=f=>{const a=addrOf(f);const i=a.lastIndexOf('@');return i<0?'':a.slice(i);};
 const hasBody=m=>!!(m&&m.body)&&!/^\(본문 없음/.test(m.body);
 const attUsable=a=>(a||[]).some(x=>x&&(x.path||x.aid));
 /* 두 벌을 한 통으로 — 본문 있는 쪽을 뼈대로, 빠진 값은 다른 쪽에서 채운다 */
@@ -37616,6 +37624,9 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
           set({picked:[]});toast(n?n+'건 본문 정리':'정리할 것 없음');}}>🧽 본문 정리</Button>
         <Button variant="gray" size="xs" onClick={bulkNote} title="선택한 메일을 각각 노트로 만듭니다(화면은 그대로)">📝 노트로</Button>
         <Button variant="secondary" size="xs" onClick={()=>set({ingest:db.mails.filter(m=>picked.includes(m.id)).map(m=>({kind:'mail',item:m}))})} title="선택한 메일을 개념 노트에 합칩니다">🤖 위키에 수집</Button>
+        <Button variant="gray" size="xs" title="선택한 메일의 보낸사람을 차단 목록에 넣습니다" onClick={()=>{
+          const ms=db.mails.filter(m=>picked.includes(m.id));if(!ms.length)return;
+          set({block:ms.length===1?ms[0]:{multi:ms}});}}>⛔ 차단</Button>
         <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
         <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
       <div style={{display:'grid',gridTemplateColumns:mobile?'minmax(0,1fr)':lw+'px 5px minmax(0,1fr)',border:'1px solid var(--border-default)',minHeight:mobile?'auto':'calc(100vh - 260px)'}}>
@@ -37633,6 +37644,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
             <div style={{display:'flex',gap:6,flexWrap:'wrap',paddingBottom:10,borderBottom:'1px solid var(--border-default)',marginBottom:10}}>
               <TB onClick={()=>compose('reply')}>↩ 답장</TB><TB onClick={()=>compose('fwd')}>↪ 전달</TB><TB onClick={()=>upd(cur.id,{star:!cur.star})}>{cur.star?'★ 별표 해제':'☆ 별표'}</TB>
               <TB onClick={()=>sendToNote(cur)}>📝 노트로</TB><TB onClick={()=>set({ingest:[{kind:'mail',item:cur}]})}>🤖 위키에 수집</TB><TB onClick={()=>sendToEvent(cur)}>📅 일정으로</TB>
+              <TB onClick={()=>set({block:cur})} title="이 보낸사람에게서 오는 메일을 앞으로 가져오지 않습니다">⛔ 차단</TB>
               <span style={{marginLeft:'auto',display:'flex',gap:6}}><TB onClick={()=>{upd(cur.id,{folder:'archive'});set({sel:null});toast('보관됨');}}>🗄 보관</TB><Button variant="danger" size="sm" onClick={()=>{setDb('mails',arr=>arr.filter(m=>m.id!==cur.id));set({sel:null});toast('삭제됨');}}>🗑 삭제</Button></span>
             </div>
             <h3 style={{margin:'0 0 8px',font:'600 16.1px/1.35 var(--font-sans)'}}>{cur.subject}</h3>
@@ -37660,6 +37672,12 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       </div>)}
       <div style={{marginTop:10}}><Button variant="ghost" size="sm" onClick={()=>{set({accOpen:false});openSettings('mail');}}>⚙ 연동 설정 열기</Button></div>
     </Modal>
+    <BlockAddModal open={!!st.block} target={st.block} db={db} toast={toast}
+      onClose={()=>{set({block:null});setBlkN(Blocked.list().length);}}
+      onDone={(rules,dropIds)=>{
+        if(dropIds&&dropIds.length){setDb('mails',arr=>arr.filter(m=>!dropIds.includes(m.id)));set({sel:null,picked:[]});}
+        openSettings&&0;
+      }}/>
     <SkippedModal open={!!st.skipOpen} db={db} toast={toast}
       onClose={()=>{set({skipOpen:false});setBlkN(Blocked.list().length);}}
       onRestoreBlocked={mails=>importMails(mails,folderAcc())}
@@ -37675,6 +37693,51 @@ function MailRow({m,on,picked,onPick,acc,onClick,onStar}){const [h,setH]=React.u
     <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(m.body||'').split('\n')[0]}</div></div>
   <div onClick={onClick} style={{textAlign:'right',fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',cursor:'pointer'}}>{fmtDT(m.date)}<div style={{marginTop:3,color:acc.provider==='gmail'?'var(--color-success)':'var(--color-accent)',fontFamily:'var(--font-sans)'}}>{acc.label||''}</div></div>
 </div>;}
+/* 메일에서 바로 보낸사람 차단 — 주소만 막을지 도메인 전체를 막을지 고르고,
+   이미 들어와 있는 같은 발신자 메일도 함께 지울지 선택한다 */
+function BlockAddModal({open,target,db,onClose,onDone,toast}){
+  const {Modal,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const mails=target?(target.multi||[target]):[];
+  const froms=[...new Set(mails.map(m=>m.from).filter(Boolean))];
+  const addrs=[...new Set(froms.map(addrOf).filter(Boolean))];
+  const doms=[...new Set(froms.map(domainOf).filter(d=>d&&d.length>1))];
+  const [mode,setMode]=React.useState('addr');
+  const [drop,setDrop]=React.useState(true);
+  React.useEffect(()=>{if(open){setMode('addr');setDrop(true);}},[open,target]);
+  if(!open||!mails.length)return null;
+  const rules=mode==='addr'?addrs:doms;
+  const hit=db.mails.filter(m=>rules.some(r=>mode==='addr'?addrOf(m.from)===r:domainOf(m.from)===r));
+  const go=()=>{
+    let added=0;rules.forEach(r=>{if(addBlockRule(r))added++;});
+    const ids=drop?hit.map(m=>m.id):[];
+    onDone(rules,ids);
+    toast('⛔ '+rules.join(', ')+' 차단'+(added?'':' (이미 목록에 있었습니다)')+(ids.length?' · 기존 '+ids.length+'통 삭제 · ↶ 로 되돌릴 수 있습니다':''));
+    onClose();
+  };
+  const Opt=({id,label,list})=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'9px 11px',marginBottom:6,cursor:list.length?'pointer':'default',
+      border:'1px solid '+(mode===id?'var(--wb-ink)':'var(--border-default)'),borderRadius:5,background:mode===id?'var(--surface-active)':'#fff',opacity:list.length?1:.45}}>
+    <input type="radio" checked={mode===id} disabled={!list.length} onChange={()=>setMode(id)} style={{marginTop:3}}/>
+    <span style={{minWidth:0}}><b style={{fontSize:'var(--fs-md)'}}>{label}</b>
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:3,wordBreak:'break-all'}}>
+        {list.length?list.map(x=><code key={x} style={{marginRight:8}}>{x}</code>):'해당 없음'}</div></span>
+  </label>;
+  return <Modal open={open} onClose={onClose} title="보낸사람 차단" width={560}
+    footer={<><Button variant="gray" onClick={onClose}>취소</Button>
+      <Button variant="danger" icon="⛔" disabled={!rules.length} onClick={go}>차단 목록에 넣기</Button></>}>
+    <InfoBar>앞으로 이 보낸사람에게서 오는 회사 메일을 가져오지 않습니다. 차단된 메일은 버려지지 않고 <b>🚫 안 가져온 메일</b>에 쌓이므로 언제든 되살릴 수 있습니다.</InfoBar>
+    {froms.length>1&&<div style={{fontSize:'var(--fs-base)',marginBottom:8}}>선택한 <b>{mails.length}</b>통의 보낸사람 <b>{froms.length}</b>명</div>}
+    <Opt id="addr" label="이 주소만 차단" list={addrs}/>
+    <Opt id="dom" label="이 도메인 전체 차단" list={doms}/>
+    <label style={{display:'flex',gap:8,alignItems:'center',marginTop:10,fontSize:'var(--fs-base)',cursor:'pointer'}}>
+      <input type="checkbox" checked={drop} onChange={e=>setDrop(e.target.checked)}/>
+      이미 들어와 있는 이 발신자 메일 <b style={{fontFamily:'var(--font-num)'}}>{hit.length}</b>통도 함께 지우기
+      <Badge tone="muted">↶ 로 되돌릴 수 있음</Badge>
+    </label>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:10}}>
+      규칙은 ⚙ 설정 › 메일 연동의 <b>보낸사람 차단 목록</b>에 쌓입니다 — 거기서 직접 고치거나 지울 수 있습니다.
+    </div>
+  </Modal>;
+}
 /* 안 가져온 메일 한 곳에서 보기 — ① 회사 메일 차단 목록 ② Gmail 필터 제외 */
 function SkippedModal({open,db,onClose,onRestoreBlocked,onRestoreExcluded,toast}){
   const {Modal,Button}=window.HDWorkbookDesignSystem_ad60e4;
@@ -37811,7 +37874,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,AccPick,FOLDERS,SkippedModal,BlockedBody,ExcludedBody,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,AccPick,BlockAddModal,addBlockRule,domainOf,FOLDERS,SkippedModal,BlockedBody,ExcludedBody,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -37883,11 +37946,15 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   </>;
 }
 
-function EvChip({e,onClick,compact,draggable,onDragStart,onDragEnd,carrying,fs}){
-  return <div draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
+function EvChip({e,onClick,compact,draggable,onDragStart,onDragEnd,carrying,fs,touch}){
+  /* touch=true(폰)면 HTML5 끌기를 끈다 — 안드로이드에서 길게 누르면 브라우저가 제 끌기를 시작하며
+     우리 동작을 취소시켜 버린다. 글자 선택과 스크롤 가로채기도 같은 이유로 막는다 */
+  return <div draggable={touch?false:draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
     data-ev={draggable?e.id:undefined} data-title={e.title}
     style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:fs||(compact?11:12),color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',
-      opacity:carrying?.35:1,outline:carrying?'1px dashed '+CAL_COLOR[e.cal]:'none'}}>
+      opacity:carrying?.35:1,outline:carrying?'1px dashed '+CAL_COLOR[e.cal]:'none',
+      touchAction:touch&&draggable?'none':undefined,
+      WebkitUserSelect:'none',userSelect:'none',WebkitTouchCallout:'none'}}>
     {e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
     <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{e.title||'(제목 없음)'}</span>
     {e.status==='doing'&&<span style={{color:CAL_COLOR[e.cal],fontSize:9}}>◐</span>}
@@ -37918,6 +37985,12 @@ function Badge2({children,c}){return <span style={{fontSize:10.5,padding:'1px 7p
    화면 아래 휴지통 칸에 떨구면 지우고, 날짜 칸에 떨구면 옮긴다.
    데스크톱: 예전처럼 마우스로 끌되, 끄는 동안 같은 휴지통 칸이 나타난다 */
 const TRASH_ID='pms-cal-trash';
+/* 일정 칩 위에서는 브라우저가 화면을 밀지 않게 한다 —
+   누르고 있는 동안 화면이 조금이라도 밀리면 브라우저가 터치를 취소해 버려서
+   "세게 눌러도 금방 풀리는" 것처럼 보인다. 칩 위에서만 막으므로 다른 곳에서는 평소처럼 스크롤된다.
+   눌리는 중에는 살짝 작아지게 해 잡히고 있다는 걸 보여 준다 */
+const CAL_TOUCH_CSS=`[data-ev]{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+[data-ev].pms-holding{transform:scale(.94);filter:brightness(.92);transition:transform .22s ease,filter .22s ease}`;
 const inTrash=(x,y)=>{const t=document.elementFromPoint(x,y);return !!(t&&t.closest&&t.closest('#'+TRASH_ID));};
 const dayAt=(x,y)=>{const t=document.elementFromPoint(x,y);const c=t&&t.closest?t.closest('[data-day]'):null;return c;};
 function TrashBar({show,hot}){
@@ -37937,18 +38010,21 @@ function useCarry({onHover,onDropAt,onDelete}){
   React.useEffect(()=>{
     const el=ref.current;if(!el)return;
     let timer=null,st=null,id=null,live=false;
-    const stop=()=>{clearTimeout(timer);timer=null;st=null;id=null;live=false;};
+    const unhold=()=>{[...el.querySelectorAll('.pms-holding')].forEach(x=>x.classList.remove('pms-holding'));};
+    const stop=()=>{clearTimeout(timer);timer=null;st=null;id=null;live=false;unhold();};
     const ts=ev=>{
       const t=ev.touches[0];const chip=ev.target.closest&&ev.target.closest('[data-ev]');
       if(!chip){stop();return;}
       id=chip.getAttribute('data-ev');st={x:t.clientX,y:t.clientY};live=false;
-      timer=setTimeout(()=>{live=true;
+      chip.classList.add('pms-holding');
+      timer=setTimeout(()=>{live=true;unhold();
         setCarry({id,title:chip.getAttribute('data-title')||'',x:st.x,y:st.y,trash:false});
-        if(navigator.vibrate)try{navigator.vibrate(14);}catch(_){}},420);
+        if(navigator.vibrate)try{navigator.vibrate(18);}catch(_){}},320);
     };
     const tm=ev=>{
       const t=ev.touches[0];if(!t)return;
-      if(!live){if(st&&Math.hypot(t.clientX-st.x,t.clientY-st.y)>8)stop();return;}
+      /* 손가락은 가만히 있어도 조금 흔들린다 — 14px 까지는 "누르고 있는 중"으로 본다 */
+      if(!live){if(st&&Math.hypot(t.clientX-st.x,t.clientY-st.y)>14)stop();return;}
       ev.preventDefault();
       const tr=inTrash(t.clientX,t.clientY);
       setCarry(c=>c?{...c,x:t.clientX,y:t.clientY,trash:tr}:c);
@@ -37964,11 +38040,14 @@ function useCarry({onHover,onDropAt,onDelete}){
       }
       stop();setCarry(null);H.current.onHover(-1,-1,false);
     };
+    /* 길게 누르는 동안 안드로이드가 글자 선택 메뉴를 띄우면 집기가 풀린다 — 미리 막는다 */
+    const ctx=e=>{if(timer||live)e.preventDefault();};
     el.addEventListener('touchstart',ts,{passive:true});
     el.addEventListener('touchmove',tm,{passive:false});
     el.addEventListener('touchend',te);el.addEventListener('touchcancel',te);
+    el.addEventListener('contextmenu',ctx);
     return()=>{clearTimeout(timer);el.removeEventListener('touchstart',ts);el.removeEventListener('touchmove',tm);
-      el.removeEventListener('touchend',te);el.removeEventListener('touchcancel',te);};
+      el.removeEventListener('touchend',te);el.removeEventListener('touchcancel',te);el.removeEventListener('contextmenu',ctx);};
   },[]);
   return [ref,carry];
 }
@@ -38023,6 +38102,7 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
   const maxShow=mobile?(z>=2?4:3):3;
   const inner={minWidth:mobile&&z>1?(7*cellW)+'px':'auto'};
   return <div style={{border:'1px solid var(--border-strong)',position:'relative'}}>
+    <style>{CAL_TOUCH_CSS}</style>
     <CarryTag carry={carry}/>
     <TrashBar show={!!carry} hot={!!(carry&&carry.trash)}/>
     {md.zone}
@@ -38044,7 +38124,7 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
           {d===today&&<span style={{fontSize:10,marginLeft:'auto',color:'var(--color-accent)'}}>오늘</span>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:2}}>
-          {es.slice(0,maxShow).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={fs} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id}
+          {es.slice(0,maxShow).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={fs} touch={mobile} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id}
             onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';md.start();}} onDragEnd={md.end}/>)}
           {sts.slice(0,Math.max(0,maxShow+1-Math.min(es.length,maxShow))).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={openEv} compact/>)}
           {items>maxShow+1&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-maxShow-1}</span>}
@@ -38096,6 +38176,7 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
   const openEv=e=>{if(!quietClick())onOpen(e);};
   const cols='48px repeat(7,minmax('+Math.round(110*(z>=2?1.45:z>=1.5?1.2:1))+'px,1fr))';
   return <div style={{border:'1px solid var(--border-strong)',position:'relative'}}>
+    <style>{CAL_TOUCH_CSS}</style>
     <CarryTag carry={carry}/>
     <TrashBar show={!!carry} hot={!!(carry&&carry.trash)}/>
     {md.zone}
@@ -38108,7 +38189,7 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
         <div style={{fontFamily:'var(--font-num)',fontWeight:700,fontSize:15,color:d===today?'var(--color-accent)':hol?'var(--color-danger)':'var(--text-body)'}}>{dt.getDate()}</div>
         {hol&&<div style={{fontSize:10,color:'var(--color-danger)'}}>{hol.replace(/^대체공휴일\((.*)\)$/,'$1 대체')}</div>}
         <div style={{display:'flex',flexDirection:'column',gap:2,marginTop:3,minHeight:16}}>
-          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={mobile?(z>=1.5?12.5:11.5):11} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id} onDragStart={dragStart(e)} onDragEnd={md.end}/>)}
+          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={mobile?(z>=1.5?12.5:11.5):11} touch={mobile} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id} onDragStart={dragStart(e)} onDragEnd={md.end}/>)}
           {stones.filter(s=>s.m.date===d).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={openEv} compact/>)}</div></div>;})}</div>
     <div style={{display:'grid',gridTemplateColumns:cols,position:'relative'}}>
       <div>{[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,fontFamily:'var(--font-num)',fontSize:11,color:'var(--text-label)',textAlign:'right',paddingRight:6,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}>{pad2(H0+i)}:00</div>)}</div>
@@ -38117,10 +38198,12 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
         style={{position:'relative',borderLeft:'1px solid var(--border-default)',background:over==='t'+d?'var(--surface-link-cell)':d===today?'var(--surface-input-cell)':'#fff'}}>
         {[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}></div>)}
         {occ.filter(e=>e.date===d&&e.start).map((e,j)=>{const [sh,sm]=e.start.split(':').map(Number);const [eh,em]=(e.end||e.start).split(':').map(Number);const top=((sh-H0)*60+sm)/60*PX;const hgt=Math.max(22,((eh-sh)*60+(em-sm))/60*PX);
-          return <div key={e.id+j} draggable={e.repeat==='none'} data-ev={e.repeat==='none'?e.id:undefined} data-title={e.title}
+          return <div key={e.id+j} draggable={mobile?false:e.repeat==='none'} data-ev={e.repeat==='none'?e.id:undefined} data-title={e.title}
             onDragStart={dragStart(e)} onDragEnd={md.end} onClick={ev=>{ev.stopPropagation();openEv(e);}}
             style={{position:'absolute',left:3,right:3,top,height:hgt-2,background:CAL_COLOR[e.cal]+'26',borderLeft:'3px solid '+CAL_COLOR[e.cal],borderRadius:3,padding:'2px 5px',fontSize:mobile?12.5:11.5,overflow:'hidden',cursor:e.repeat==='none'?'grab':'pointer',
-              opacity:carry&&carry.id===e.id?.35:1,textDecoration:e.status==='done'?'line-through':'none'}}>
+              opacity:carry&&carry.id===e.id?.35:1,textDecoration:e.status==='done'?'line-through':'none',
+              touchAction:mobile&&e.repeat==='none'?'none':undefined,
+              WebkitUserSelect:'none',userSelect:'none',WebkitTouchCallout:'none'}}>
             <div style={{fontWeight:600}}>{e.title}</div><div style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}–{e.end}</div></div>;})}
       </div>)}
     </div>
@@ -39494,7 +39577,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v6.0';
+const APP_VERSION='v6.1';
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
