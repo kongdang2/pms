@@ -36389,6 +36389,13 @@ const MailFolder={
     out.sort((a,b)=>a.name.localeCompare(b.name));
     return out;
   },
+  /* 연결 상태 — none: 폴더를 아직 안 골랐음 · need: 권한이 풀렸음(브라우저를 껐다 켜면 생김) · ok */
+  async state(){
+    if(!this.ok())return 'unsupported';
+    const h=await this.handle();if(!h)return 'none';
+    let st='granted';try{st=await h.queryPermission({mode:'read'});}catch(_){}
+    return st==='granted'?'ok':'need';
+  },
   /* 폴더 상태 — 전체 .eml 개수와 아직 안 읽은 개수 */
   async stats(ask){
     const h=await this.ready(ask);if(!h)return null;
@@ -36792,14 +36799,16 @@ function FilesSection({onToast}){
 /* 회사 메일 .eml 폴더 지정 */
 function MailFolderSection({onToast}){
   const {Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
-  const [name,setName]=React.useState('');const [st,setSt]=React.useState('');
+  const [name,setName]=React.useState('');const [st,setSt]=React.useState('');const [cnt,setCnt]=React.useState(null);
   const refresh=async()=>{const n=await MailFolder.name();setName(n||'');
-    if(n){const h=await MailFolder.ready(false);setSt(h?'granted':'prompt');}else setSt('');};
+    if(n){const h=await MailFolder.ready(false);setSt(h?'granted':'prompt');
+      if(h){try{setCnt(await MailFolder.stats(false));}catch(_){setCnt(null);}}else setCnt(null);}
+    else{setSt('');setCnt(null);}};
   React.useEffect(()=>{refresh();},[]);
   const pick=async()=>{try{const n=await MailFolder.pick();setName(n);setSt('granted');onToast&&onToast('폴더 지정됨 · '+n);}
     catch(e){if(!/abort/i.test(e.name||''))onToast&&onToast('⚠ '+e.message);}};
   const allow=async()=>{const h=await MailFolder.ready(true);setSt(h?'granted':'denied');
-    onToast&&onToast(h?'폴더 접근 허용됨':'허용되지 않았습니다');};
+    if(h)refresh();onToast&&onToast(h?'폴더 접근 허용됨':'허용되지 않았습니다');};
   const forget=async()=>{await MailFolder.forget();setName('');setSt('');onToast&&onToast('폴더 연결 해제');};
   if(!MailFolder.ok())return <InfoBar tone="warn">이 브라우저는 폴더 읽기를 지원하지 않습니다 — 크롬·엣지에서 열어주세요(사파리·파이어폭스 미지원).</InfoBar>;
   return <div style={{margin:'6px 0 10px'}}>
@@ -36810,6 +36819,10 @@ function MailFolderSection({onToast}){
       {name&&<Button variant="gray" size="sm" onClick={()=>{const n=MailFolder.reread();onToast&&onToast(n?'읽은 기록 '+n+'건 지움 — 다음 동기화에 폴더를 처음부터 다시 읽습니다':'지울 기록 없음');}} title="폴더에 남아 있는 .eml 을 처음부터 다시 가져옵니다">↻ 다시 읽기</Button>}
       {name&&<Button variant="ghost" size="sm" onClick={forget}>연결 해제</Button>}
     </div>
+    {cnt&&<div style={{marginTop:8,padding:'7px 10px',border:'1px solid var(--border-default)',borderRadius:4,background:'var(--surface-hover)',fontSize:'var(--fs-base)'}}>
+      폴더 안의 <b style={{fontFamily:'var(--font-num)'}}>{cnt.all}</b>개 <code>.eml</code> 중 <b style={{fontFamily:'var(--font-num)'}}>{cnt.neu}</b>개가 아직 안 읽은 파일입니다.
+      {cnt.all===0&&<span style={{color:'var(--color-danger)'}}> — 파일이 하나도 없습니다. 회사 PC의 작업 스케줄러가 도는지 확인하세요.</span>}
+    </div>}
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:6,lineHeight:1.55}}>
       스크립트가 저장하는 폴더(예: <code>문서\PMS_Mail</code>)를 고르세요. 자동 동기화 주기마다 새 <code>.eml</code>만 읽어 갑니다.
       브라우저를 새로 열면 권한을 한 번 더 확인할 수 있습니다 — 그때는 이 화면에서 「권한 다시 주기」를 누르세요.
@@ -37408,16 +37421,28 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const pf=React.useRef(pullFolder);pf.current=pullFolder;
   const qs=React.useRef(quietSync);qs.current=quietSync;
   const auto=+(Store.cfg.mailAuto||0);
+  /* 자동 확인이 실제로 돌고 있는지 눈에 보이게 — 마지막으로 돈 시각과 폴더 연결 상태 */
+  const [lastRun,setLastRun]=React.useState(0);
+  const [fstat,setFstat]=React.useState('');
+  const checkFolder=React.useCallback(()=>{MailFolder.state().then(setFstat).catch(()=>{});},[]);
+  React.useEffect(()=>{checkFolder();},[checkFolder]);
   React.useEffect(()=>{
     if(!auto)return;
     let live=true,running=false;
-    const tick=async()=>{if(!live||running)return;running=true;try{await qs.current(!document.hidden);}finally{running=false;}};
+    const tick=async()=>{if(!live||running)return;running=true;
+      try{await qs.current(!document.hidden);}finally{running=false;
+        if(live){setLastRun(Date.now());MailFolder.state().then(v=>{if(live)setFstat(v);}).catch(()=>{});}}};
     const t=setInterval(tick,auto*60000);
     const onShow=()=>{if(!document.hidden)tick();};
     document.addEventListener('visibilitychange',onShow);
-    const first=setTimeout(tick,8000);   /* 화면을 연 직후 한 번 */
+    const first=setTimeout(tick,2500);   /* 화면을 연 직후 한 번 */
     return()=>{live=false;clearInterval(t);clearTimeout(first);document.removeEventListener('visibilitychange',onShow);};
   },[auto]);
+  /* 배지의 "n분 전"이 흘러가도록 1분마다 다시 그린다 */
+  const [,tickUi]=React.useReducer(x=>x+1,0);
+  React.useEffect(()=>{if(!auto)return;const t=setInterval(tickUi,60000);return()=>clearInterval(t);},[auto]);
+  const agoText=t=>{if(!t)return '대기 중';const s=Math.floor((Date.now()-t)/1000);
+    return s<60?'방금':s<3600?Math.floor(s/60)+'분 전':Math.floor(s/3600)+'시간 전';};
   /* 가져오기 — 이미 있는 메일과도, 이번에 함께 들어온 메일끼리도 겹치는지 본다.
      "지금 저장된 목록"을 기준으로 계산하므로 여러 번 연달아 불러도 두 벌이 되지 않는다 */
   const importMails=(items,acc,quiet)=>{
@@ -37467,7 +37492,10 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
         <Button variant="gray" size="sm" icon="↻" title="폴더의 .eml 을 처음부터 전부 다시 읽습니다 (이미 있는 메일은 자동으로 걸러집니다)" onClick={()=>pullAll(true)}>전부 다시</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
         if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
         set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>
-        <Button variant="gray" size="sm" icon="⛔" title="보낸사람 차단 목록에 걸려 안 가져온 회사 메일을 보고 되살립니다" onClick={()=>set({blk:true})}>차단됨{blkN?' '+blkN:''}</Button>{auto>0&&<Badge tone="pill" title="설정 › 메일 연동에서 바꿉니다">⏱ 자동 {auto}분</Badge>}</>}
+        <Button variant="gray" size="sm" icon="⛔" title="보낸사람 차단 목록에 걸려 안 가져온 회사 메일을 보고 되살립니다" onClick={()=>set({blk:true})}>차단됨{blkN?' '+blkN:''}</Button>
+        {fstat==='need'&&<Button variant="danger" size="sm" icon="⚠" title="브라우저를 껐다 켜면 폴더 권한이 풀립니다 — 눌러서 다시 허용하세요" onClick={async()=>{await pullAll(false);checkFolder();}}>폴더 권한 필요</Button>}
+        {auto>0&&<Badge tone={fstat==='need'?'warn':'pill'} title={'설정 › 메일 연동에서 바꿉니다 · 마지막 확인 '+agoText(lastRun)}>⏱ 자동 {auto}분 · {agoText(lastRun)}</Badge>}
+        {!auto&&<Badge tone="warn" style={{cursor:'pointer'}} title="설정 › 메일 연동 › 자동 동기화 주기에서 켭니다" onClick={openSettings}>⏱ 자동 꺼짐</Badge>}</>}
       toolbarRight={<>{!mobile&&<Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/>}<TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:mobile?150:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}<Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
       {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)',flexWrap:'wrap'}}>
         <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>건 선택
@@ -37679,6 +37707,17 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   const categories=[...new Set(db.events.map(e=>e.category).filter(Boolean))].sort();
   const save=ev=>{const exists=db.events.some(e=>e.id===ev.id);setDb('events',exists?db.events.map(e=>e.id===ev.id?ev:e):[...db.events,ev]);};
   const del=id=>{setDb('events',db.events.filter(e=>e.id!==id));set({edit:null});toast('삭제됨');};
+  /* 휴지통에 떨궈 지우기 — 되돌리기(↶ · Ctrl+Z)로 되살릴 수 있다 */
+  const delQuiet=id=>{const e=db.events.find(x=>x.id===id);if(!e)return;
+    setDb('events',arr=>arr.filter(x=>x.id!==id));toast('🗑 『'+(e.title||'제목 없음')+'』 삭제 · ↶ 로 되돌릴 수 있습니다');};
+  /* 폰 달력 배율 — 고른 값을 기억한다 */
+  const [zoom,setZoom]=React.useState(()=>{const v=parseFloat(localStorage.getItem('pms.calzoom'));return isFinite(v)?v:2;});
+  React.useEffect(()=>{try{localStorage.setItem('pms.calzoom',String(zoom));}catch(_){}},[zoom]);
+  const zoomSeg=mobile&&view==='month'&&<span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
+    {[1,1.5,2].map(v=><button key={v} type="button" onClick={()=>setZoom(v)}
+      style={{border:'none',borderRadius:4,padding:'3px 9px',fontSize:'var(--fs-sm2)',fontWeight:zoom===v?700:500,fontFamily:'var(--font-num)',
+        background:zoom===v?'var(--surface-active)':'transparent',color:zoom===v?'var(--text-body)':'var(--text-muted)',cursor:'pointer'}}
+      title={v===1?'한 달 전체를 한 화면에':v===1.5?'보통':'제목이 길게 보이게'}>{v}×</button>)}</span>;
   const openNew=(date,extra)=>set({edit:{...emptyEvent(date),...extra}});
   const moveEvent=(id,patch)=>{const e=db.events.find(x=>x.id===id);if(!e)return;
     if(Object.keys(patch).every(k=>e[k]===patch[k]))return;
@@ -37693,11 +37732,11 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   const body=view==='list'
     ? <ListView events={events} categories={categories} st={st} set={set} onOpen={e=>set({edit:e})} onNotes={(e,notes)=>save({...e,notes})}/>
     : sub==='week'
-      ? <WeekGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew} onMove={moveEvent}/>
-      : <MonthGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew} onMove={moveEvent}/>;
+      ? <WeekGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew} onMove={moveEvent} onDelete={delQuiet} zoom={zoom}/>
+      : <MonthGrid events={events} anchor={anchor} today={today} onOpen={e=>set({edit:e})} onNew={openNew} onMove={moveEvent} onDelete={delQuiet} zoom={zoom}/>;
   return <>
     <Card title={label} badge={<Badge tone="muted">{events.length}건</Badge>}
-      toolbar={<><Button icon="+" onClick={()=>openNew(view==='month'?anchor:today)}>새 일정</Button>{nav}{seg}</>}
+      toolbar={<><Button icon="+" onClick={()=>openNew(view==='month'?anchor:today)}>새 일정</Button>{nav}{seg}{zoomSeg}</>}
       toolbarRight={<><CalToggle cals={cals} onChange={c=>set({cals:c})}/><Button variant="classic" size="sm" icon="📥" onClick={exportICS}>ICS 내보내기</Button><Button variant="accent" size="sm" icon="📤" onClick={()=>set({icsOpen:true})}>ICS 가져오기</Button></>}>
       {body}
     </Card>
@@ -37709,10 +37748,10 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   </>;
 }
 
-function EvChip({e,onClick,compact,draggable,onDragStart,carrying}){
-  return <div draggable={draggable} onDragStart={onDragStart} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
+function EvChip({e,onClick,compact,draggable,onDragStart,onDragEnd,carrying,fs}){
+  return <div draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
     data-ev={draggable?e.id:undefined} data-title={e.title}
-    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:compact?11:12,color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',
+    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',borderRadius:3,background:CAL_COLOR[e.cal]+'1f',borderLeft:'2px solid '+CAL_COLOR[e.cal],fontSize:fs||(compact?11:12),color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',
       opacity:carrying?.35:1,outline:carrying?'1px dashed '+CAL_COLOR[e.cal]:'none'}}>
     {e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
     <span style={{overflow:'hidden',textOverflow:'ellipsis'}}>{e.title||'(제목 없음)'}</span>
@@ -37739,48 +37778,56 @@ function InlineText({value,onSave,placeholder,style}){
 function Badge2({children,c}){return <span style={{fontSize:10.5,padding:'1px 7px',borderRadius:10,border:'1px solid '+(c||'var(--border-default)'),color:c||'var(--text-muted)',fontWeight:500}}>{children}</span>;}
 
 /* 월간: 공휴일 표시 · 일정 드래그로 날짜 이동 · 마일스톤 마커 */
-function MonthGrid({events,anchor,today,onOpen,onNew,onMove}){
-  const ms=monthStart(anchor);const first=new Date(ms+'T00:00:00');const startISO=shiftDay(ms,-first.getDay());
-  const days=[...Array(42)].map((_,i)=>shiftDay(startISO,i));
-  const occ=expandEvents(events,days[0],days[41]);
-  const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[41])stones.push({m,e});}));
-  const [over,setOver]=React.useState(null);
-  const drop=d=>ev=>{ev.preventDefault();setOver(null);const id=ev.dataTransfer.getData('text/pms-event');if(id)onMove(id,{date:d});};
-  /* ── 폰: 길게 눌러 옮기기 ──
-     일정을 0.4초쯤 누르고 있으면 "집었다"가 되고, 그대로 손가락을 끌면 날짜 칸이 따라 밝아진다.
-     떼면 그 날짜로 옮긴다. 살짝 누르면 예전처럼 그냥 열린다 */
-  const gridRef=React.useRef();const mobile=useMobile();
-  const [carry,setCarry]=React.useState(null);
-  const CR=React.useRef({});CR.current.move=onMove;
+/* ── 집어 옮기기 · 휴지통에 떨궈 지우기 (월간·주간 공용) ──────────────
+   폰: 일정을 0.4초쯤 누르면 "집었다"가 되고, 끌면 날짜 칸이 따라 밝아진다.
+   화면 아래 휴지통 칸에 떨구면 지우고, 날짜 칸에 떨구면 옮긴다.
+   데스크톱: 예전처럼 마우스로 끌되, 끄는 동안 같은 휴지통 칸이 나타난다 */
+const TRASH_ID='pms-cal-trash';
+const inTrash=(x,y)=>{const t=document.elementFromPoint(x,y);return !!(t&&t.closest&&t.closest('#'+TRASH_ID));};
+const dayAt=(x,y)=>{const t=document.elementFromPoint(x,y);const c=t&&t.closest?t.closest('[data-day]'):null;return c;};
+function TrashBar({show,hot}){
+  if(!show)return null;
+  return <div id={TRASH_ID} style={{position:'fixed',left:0,right:0,bottom:0,zIndex:210,
+    height:'calc(74px + env(safe-area-inset-bottom))',paddingBottom:'env(safe-area-inset-bottom)',
+    display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+    background:hot?'rgba(190,45,45,.96)':'rgba(40,45,52,.92)',color:'#fff',
+    borderTop:'2px solid '+(hot?'#FFD9D9':'rgba(255,255,255,.25)'),
+    fontSize:14,fontWeight:700,letterSpacing:'-.01em',transition:'background .12s'}}>
+    <span style={{fontSize:19}}>🗑</span>{hot?'놓으면 삭제됩니다':'여기에 놓으면 삭제'}
+  </div>;
+}
+function useCarry({onHover,onDropAt,onDelete}){
+  const ref=React.useRef();const [carry,setCarry]=React.useState(null);
+  const H=React.useRef({});H.current={onHover,onDropAt,onDelete};
   React.useEffect(()=>{
-    const el=gridRef.current;if(!el)return;
+    const el=ref.current;if(!el)return;
     let timer=null,st=null,id=null,live=false;
-    const dayAt=(x,y)=>{const t=document.elementFromPoint(x,y);const c=t&&t.closest?t.closest('[data-day]'):null;return c?c.getAttribute('data-day'):null;};
     const stop=()=>{clearTimeout(timer);timer=null;st=null;id=null;live=false;};
     const ts=ev=>{
       const t=ev.touches[0];const chip=ev.target.closest&&ev.target.closest('[data-ev]');
       if(!chip){stop();return;}
       id=chip.getAttribute('data-ev');st={x:t.clientX,y:t.clientY};live=false;
       timer=setTimeout(()=>{live=true;
-        setCarry({id,title:chip.getAttribute('data-title')||'',x:st.x,y:st.y});
-        if(navigator.vibrate)try{navigator.vibrate(14);}catch(_){}
-      },420);
+        setCarry({id,title:chip.getAttribute('data-title')||'',x:st.x,y:st.y,trash:false});
+        if(navigator.vibrate)try{navigator.vibrate(14);}catch(_){}},420);
     };
     const tm=ev=>{
       const t=ev.touches[0];if(!t)return;
       if(!live){if(st&&Math.hypot(t.clientX-st.x,t.clientY-st.y)>8)stop();return;}
       ev.preventDefault();
-      setCarry(c=>c?{...c,x:t.clientX,y:t.clientY}:c);
-      setOver(dayAt(t.clientX,t.clientY));
+      const tr=inTrash(t.clientX,t.clientY);
+      setCarry(c=>c?{...c,x:t.clientX,y:t.clientY,trash:tr}:c);
+      H.current.onHover(t.clientX,t.clientY,tr);
+      edgeScroll(el,t.clientX);
     };
     const te=ev=>{
       if(live){
-        const t=ev.changedTouches&&ev.changedTouches[0];const d=t?dayAt(t.clientX,t.clientY):null;
-        if(d&&id)CR.current.move(id,{date:d});
-        CR.current.until=Date.now()+450;                    /* 손을 뗀 직후의 클릭은 무시 */
+        const t=ev.changedTouches&&ev.changedTouches[0];
+        if(t){if(inTrash(t.clientX,t.clientY))H.current.onDelete(id);else H.current.onDropAt(id,t.clientX,t.clientY);}
+        CARRY.until=Date.now()+450;                       /* 손을 뗀 직후의 클릭은 무시 */
         ev.preventDefault();
       }
-      stop();setCarry(null);setOver(null);
+      stop();setCarry(null);H.current.onHover(-1,-1,false);
     };
     el.addEventListener('touchstart',ts,{passive:true});
     el.addEventListener('touchmove',tm,{passive:false});
@@ -37788,14 +37835,65 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove}){
     return()=>{clearTimeout(timer);el.removeEventListener('touchstart',ts);el.removeEventListener('touchmove',tm);
       el.removeEventListener('touchend',te);el.removeEventListener('touchcancel',te);};
   },[]);
-  const quiet=()=>Date.now()<(CR.current.until||0);
-  const openEv=e=>{if(!quiet())onOpen(e);};
-  const newAt=d=>{if(!quiet())onNew(d);};
-  return <div ref={gridRef} style={{border:'1px solid var(--border-strong)',position:'relative'}}>
-    {carry&&<div style={{position:'fixed',left:carry.x,top:carry.y-34,transform:'translateX(-50%)',zIndex:200,pointerEvents:'none',
-      background:'var(--wb-ink)',color:'#fff',borderRadius:6,padding:'4px 10px',fontSize:12,fontWeight:600,
-      maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',boxShadow:'0 3px 10px rgba(0,0,0,.3)'}}>
-      📅 {carry.title||'일정'}</div>}
+  return [ref,carry];
+}
+const CARRY={until:0};
+const quietClick=()=>Date.now()<CARRY.until;
+/* 확대해서 가로로 넘칠 때, 손가락이 가장자리에 가면 저절로 밀린다 */
+function edgeScroll(el,x){
+  const sc=el.closest?el.closest('[data-hscroll]'):null;if(!sc)return;
+  const r=sc.getBoundingClientRect();const M=42;
+  if(x<r.left+M)sc.scrollLeft-=14;else if(x>r.right-M)sc.scrollLeft+=14;
+}
+function CarryTag({carry}){
+  if(!carry)return null;
+  return <div style={{position:'fixed',left:carry.x,top:carry.y-34,transform:'translateX(-50%)',zIndex:220,pointerEvents:'none',
+    background:carry.trash?'var(--color-danger)':'var(--wb-ink)',color:'#fff',borderRadius:6,padding:'4px 10px',fontSize:12,fontWeight:600,
+    maxWidth:200,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',boxShadow:'0 3px 10px rgba(0,0,0,.3)'}}>
+    {carry.trash?'🗑':'📅'} {carry.title||'일정'}</div>;
+}
+/* 데스크톱에서 마우스로 끄는 동안에도 휴지통을 띄운다 */
+function useMouseDrag(onDelete){
+  const [on,setOn]=React.useState(false),[hot,setHot]=React.useState(false);
+  const start=()=>setOn(true),end=()=>{setOn(false);setHot(false);};
+  const zone=on&&<div id={TRASH_ID}
+    onDragOver={ev=>{ev.preventDefault();setHot(true);}} onDragLeave={()=>setHot(false)}
+    onDrop={ev=>{ev.preventDefault();const id=ev.dataTransfer.getData('text/pms-event');end();if(id)onDelete(id);}}
+    style={{position:'fixed',left:0,right:0,bottom:0,zIndex:210,height:74,display:'flex',alignItems:'center',justifyContent:'center',gap:8,
+      background:hot?'rgba(190,45,45,.96)':'rgba(40,45,52,.92)',color:'#fff',borderTop:'2px solid '+(hot?'#FFD9D9':'rgba(255,255,255,.25)'),
+      fontSize:14,fontWeight:700}}><span style={{fontSize:19}}>🗑</span>{hot?'놓으면 삭제됩니다':'여기에 놓으면 삭제'}</div>;
+  return {start,end,zone};
+}
+function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
+  const ms=monthStart(anchor);const first=new Date(ms+'T00:00:00');const startISO=shiftDay(ms,-first.getDay());
+  const days=[...Array(42)].map((_,i)=>shiftDay(startISO,i));
+  const occ=expandEvents(events,days[0],days[41]);
+  const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[41])stones.push({m,e});}));
+  const [over,setOver]=React.useState(null);
+  const drop=d=>ev=>{ev.preventDefault();setOver(null);const id=ev.dataTransfer.getData('text/pms-event');if(id)onMove(id,{date:d});};
+  const mobile=useMobile();const z=mobile?(zoom||2):1;
+  const md=useMouseDrag(onDelete);
+  const [gridRef,carry]=useCarry({
+    onHover:(x,y,tr)=>{if(tr){setOver(null);return;}const c=x<0?null:dayAt(x,y);setOver(c?c.getAttribute('data-day'):null);},
+    onDropAt:(id,x,y)=>{const c=dayAt(x,y);const d=c&&c.getAttribute('data-day');if(d)onMove(id,{date:d});setOver(null);},
+    onDelete:id=>{onDelete(id);setOver(null);},
+  });
+  const openEv=e=>{if(!quietClick())onOpen(e);};
+  const newAt=d=>{if(!quietClick())onNew(d);};
+  /* 폰에서는 글자와 칸을 키우고, 배율이 1을 넘으면 가로로 넘겨 본다 */
+  /* 글자는 살짝만 키우고 "칸 너비"를 늘린다 — 2× 면 한 칸이 130px 남짓이라 제목 10글자쯤 들어간다 */
+  const cellW=Math.round(66*z);
+  const cellH=mobile?(z>=2?116:z>=1.5?106:96):96;
+  const fs=mobile?(z>=1.5?12.5:11.5):11;
+  const maxShow=mobile?(z>=2?4:3):3;
+  const inner={minWidth:mobile&&z>1?(7*cellW)+'px':'auto'};
+  return <div style={{border:'1px solid var(--border-strong)',position:'relative'}}>
+    <CarryTag carry={carry}/>
+    <TrashBar show={!!carry} hot={!!(carry&&carry.trash)}/>
+    {md.zone}
+    <div ref={gridRef} data-hscroll={mobile&&z>1?'1':undefined}
+      style={{overflowX:mobile&&z>1?'auto':'visible',WebkitOverflowScrolling:'touch'}}>
+    <div style={inner}>
     <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))',borderBottom:'1.3px solid var(--border-table-head)'}}>{['일','월','화','수','목','금','토'].map((d,i)=><div key={d} style={{padding:'5px 0',textAlign:'center',fontSize:'var(--fs-sm2)',fontWeight:700,color:i===0?'var(--color-danger)':i===6?'var(--color-accent)':'var(--text-body)'}}>{d}</div>)}</div>
     <div style={{display:'grid',gridTemplateColumns:'repeat(7,minmax(0,1fr))'}}>{days.map((d,i)=>{
       const inM=d.slice(0,7)===ms.slice(0,7);const dow=i%7;const hol=holidayOf(d);
@@ -37803,30 +37901,33 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove}){
       const items=es.length+sts.length;
       const dcol=hol||dow===0?'var(--color-danger)':dow===6?'var(--color-accent)':'var(--text-body)';
       return <div key={d} data-day={d} onClick={()=>newAt(d)} onDragOver={ev=>{ev.preventDefault();setOver(d);}} onDragLeave={()=>setOver(o=>o===d?null:o)} onDrop={drop(d)}
-        style={{minHeight:96,padding:'4px 5px',borderRight:dow<6?'1px solid var(--border-default)':'none',borderBottom:i<35?'1px solid var(--border-default)':'none',
+        style={{minHeight:cellH,padding:'4px 5px',borderRight:dow<6?'1px solid var(--border-default)':'none',borderBottom:i<35?'1px solid var(--border-default)':'none',
           background:over===d?'var(--surface-link-cell)':inM?(d===today?'var(--surface-input-cell)':hol?'var(--color-danger-surface)':'#fff'):'var(--surface-hover)',cursor:'pointer',overflow:'hidden'}}>
         <div style={{display:'flex',alignItems:'baseline',gap:4,marginBottom:3}}>
-          <span style={{fontFamily:'var(--font-num)',fontSize:12,fontWeight:d===today?700:400,color:inM?dcol:'var(--text-label)'}}>{Number(d.slice(8))}</span>
+          <span style={{fontFamily:'var(--font-num)',fontSize:mobile?(z>=1.5?13:12):12,fontWeight:d===today?700:400,color:inM?dcol:'var(--text-label)'}}>{Number(d.slice(8))}</span>
           {hol&&inM&&<span style={{fontSize:10,color:'var(--color-danger)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{hol.replace(/^대체공휴일\((.*)\)$/,'$1 대체')}</span>}
           {d===today&&<span style={{fontSize:10,marginLeft:'auto',color:'var(--color-accent)'}}>오늘</span>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:2}}>
-          {es.slice(0,3).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id} onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';}}/>)}
-          {sts.slice(0,Math.max(0,4-Math.min(es.length,3))).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={onOpen} compact/>)}
-          {items>4&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-4}</span>}
+          {es.slice(0,maxShow).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={fs} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id}
+            onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';md.start();}} onDragEnd={md.end}/>)}
+          {sts.slice(0,Math.max(0,maxShow+1-Math.min(es.length,maxShow))).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={openEv} compact/>)}
+          {items>maxShow+1&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-maxShow-1}</span>}
         </div></div>;})}</div>
-    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>{mobile?'일정을 꾹 눌렀다가 끌면 다른 날짜로 옮깁니다':'일정을 다른 날짜로 끌어 옮길 수 있습니다'} · ◆ 마일스톤 · 반복 일정(↻)은 이동 불가</div>
+    </div></div>
+    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>{mobile?'일정을 꾹 눌렀다가 끌면 옮기고, 아래 🗑 칸에 놓으면 지웁니다'+(z>1?' · 좌우로 밀어 다른 요일 보기 (1× 는 한 달 전체)':''):'일정을 끌어 다른 날짜로 옮기거나 아래 🗑 칸에 놓아 지웁니다'} · ◆ 마일스톤 · 반복 일정(↻)은 이동 불가</div>
   </div>;
 }
 
-function WeekGrid({events,anchor,today,onOpen,onNew,onMove}){
-  const ws=weekStart(anchor);const days=[...Array(7)].map((_,i)=>shiftDay(ws,i));const occ=expandEvents(events,days[0],days[6]);const H0=7,H1=21,PX=44;
+function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
+  const mobile=useMobile();const z=mobile?(zoom||2):1;
+  const ws=weekStart(anchor);const days=[...Array(7)].map((_,i)=>shiftDay(ws,i));const occ=expandEvents(events,days[0],days[6]);const H0=7,H1=21,PX=Math.round(44*(z>=2?1.5:z>=1.5?1.25:1));
   const stones=[];events.forEach(e=>msList(e).forEach(m=>{if(m.date>=days[0]&&m.date<=days[6])stones.push({m,e});}));
   const allDay=d=>occ.filter(e=>e.date===d&&!e.start);
   const [over,setOver]=React.useState(null);
   const durOf=e=>{if(!e.start)return 60;const [sh,sm]=e.start.split(':').map(Number);const [eh,em]=(e.end||e.start).split(':').map(Number);return Math.max(30,(eh*60+em)-(sh*60+sm))||60;};
   const fmt=m=>pad2(Math.floor(m/60))+':'+pad2(m%60);
-  const dragStart=e=>ev=>{ev.stopPropagation();ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';};
+  const dragStart=e=>ev=>{ev.stopPropagation();ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';md.start();};
   /* 시간 칸에 놓기 — 30분 단위로 붙이고 원래 길이는 유지 */
   const dropTime=d=>ev=>{ev.preventDefault();setOver(null);const id=ev.dataTransfer.getData('text/pms-event');if(!id)return;
     const src=events.find(x=>x.id===id);if(!src)return;
@@ -37837,30 +37938,59 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove}){
     onMove(id,{date:d,start:fmt(t0),end:fmt(t1)});};
   const dropAllDay=d=>ev=>{ev.preventDefault();setOver(null);const id=ev.dataTransfer.getData('text/pms-event');if(id)onMove(id,{date:d,start:'',end:''});};
   const allow=key=>ev=>{ev.preventDefault();setOver(key);};
-  return <div style={{border:'1px solid var(--border-strong)',overflowX:'auto'}}>
-    <div style={{display:'grid',gridTemplateColumns:'48px repeat(7,minmax(110px,1fr))',borderBottom:'1.3px solid var(--border-table-head)'}}>
+  const md=useMouseDrag(onDelete);
+  /* 폰: 길게 눌러 집기 — 종일 칸에 놓으면 종일, 시간 칸에 놓으면 그 시각(30분 단위) */
+  const dropWeek=(id,x,y)=>{
+    const el=document.elementFromPoint(x,y);const cell=el&&el.closest?el.closest('[data-day]'):null;
+    if(!cell)return;
+    const d=cell.getAttribute('data-day');
+    if(cell.getAttribute('data-kind')==='allday'){onMove(id,{date:d,start:'',end:''});return;}
+    const src=events.find(e=>e.id===id);if(!src){onMove(id,{date:d});return;}
+    const r=cell.getBoundingClientRect();
+    let mins=Math.round(((y-r.top)/PX*60)/30)*30;
+    mins=Math.max(0,Math.min((H1-H0)*60-30,mins));
+    const t0=H0*60+mins,t1=Math.min(t0+durOf(src),24*60-1);
+    onMove(id,{date:d,start:fmt(t0),end:fmt(t1)});
+  };
+  const [gridRef,carry]=useCarry({
+    onHover:(x,y,tr)=>{if(tr||x<0){setOver(null);return;}
+      const c=dayAt(x,y);setOver(c?(c.getAttribute('data-kind')==='allday'?'a':'t')+c.getAttribute('data-day'):null);},
+    onDropAt:(id,x,y)=>{dropWeek(id,x,y);setOver(null);},
+    onDelete:id=>{onDelete(id);setOver(null);},
+  });
+  const openEv=e=>{if(!quietClick())onOpen(e);};
+  const cols='48px repeat(7,minmax('+Math.round(110*(z>=2?1.45:z>=1.5?1.2:1))+'px,1fr))';
+  return <div style={{border:'1px solid var(--border-strong)',position:'relative'}}>
+    <CarryTag carry={carry}/>
+    <TrashBar show={!!carry} hot={!!(carry&&carry.trash)}/>
+    {md.zone}
+    <div ref={gridRef} data-hscroll="1" style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
+    <div style={{display:'grid',gridTemplateColumns:cols,borderBottom:'1.3px solid var(--border-table-head)'}}>
       <div style={{fontSize:10,color:'var(--text-label)',textAlign:'right',paddingRight:6,paddingTop:6}}>종일</div>
-      {days.map(d=>{const dt=new Date(d+'T00:00:00');const hol=holidayOf(d);return <div key={d} onDragOver={allow('a'+d)} onDragLeave={()=>setOver(o=>o==='a'+d?null:o)} onDrop={dropAllDay(d)}
+      {days.map(d=>{const dt=new Date(d+'T00:00:00');const hol=holidayOf(d);return <div key={d} data-day={d} data-kind="allday" onDragOver={allow('a'+d)} onDragLeave={()=>setOver(o=>o==='a'+d?null:o)} onDrop={dropAllDay(d)}
         style={{padding:'6px 4px',textAlign:'center',borderLeft:'1px solid var(--border-default)',background:over==='a'+d?'var(--surface-link-cell)':d===today?'var(--surface-input-cell)':hol?'var(--color-danger-surface)':'#fff'}}>
         <div style={{fontSize:'var(--fs-sm)',color:hol||dt.getDay()===0?'var(--color-danger)':dt.getDay()===6?'var(--color-accent)':'var(--text-label)'}}>{['일','월','화','수','목','금','토'][dt.getDay()]}</div>
         <div style={{fontFamily:'var(--font-num)',fontWeight:700,fontSize:15,color:d===today?'var(--color-accent)':hol?'var(--color-danger)':'var(--text-body)'}}>{dt.getDate()}</div>
         {hol&&<div style={{fontSize:10,color:'var(--color-danger)'}}>{hol.replace(/^대체공휴일\((.*)\)$/,'$1 대체')}</div>}
         <div style={{display:'flex',flexDirection:'column',gap:2,marginTop:3,minHeight:16}}>
-          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} onClick={onOpen} compact draggable={e.repeat==='none'} onDragStart={dragStart(e)}/>)}
-          {stones.filter(s=>s.m.date===d).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={onOpen} compact/>)}</div></div>;})}</div>
-    <div style={{display:'grid',gridTemplateColumns:'48px repeat(7,minmax(110px,1fr))',position:'relative'}}>
+          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} onClick={openEv} compact fs={mobile?(z>=1.5?12.5:11.5):11} draggable={e.repeat==='none'} carrying={!!carry&&carry.id===e.id} onDragStart={dragStart(e)} onDragEnd={md.end}/>)}
+          {stones.filter(s=>s.m.date===d).map((s,j)=><MsChip key={'m'+j} m={s.m} e={s.e} onClick={openEv} compact/>)}</div></div>;})}</div>
+    <div style={{display:'grid',gridTemplateColumns:cols,position:'relative'}}>
       <div>{[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,fontFamily:'var(--font-num)',fontSize:11,color:'var(--text-label)',textAlign:'right',paddingRight:6,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}>{pad2(H0+i)}:00</div>)}</div>
-      {days.map(d=><div key={d} onDragOver={allow('t'+d)} onDragLeave={()=>setOver(o=>o==='t'+d?null:o)} onDrop={dropTime(d)}
-        onClick={ev=>{const r=ev.currentTarget.getBoundingClientRect();const h=H0+Math.floor((ev.clientY-r.top)/PX);onNew(d,{start:pad2(h)+':00',end:pad2(h+1)+':00'});}}
+      {days.map(d=><div key={d} data-day={d} data-kind="time" onDragOver={allow('t'+d)} onDragLeave={()=>setOver(o=>o==='t'+d?null:o)} onDrop={dropTime(d)}
+        onClick={ev=>{if(quietClick())return;const r=ev.currentTarget.getBoundingClientRect();const h=H0+Math.floor((ev.clientY-r.top)/PX);onNew(d,{start:pad2(h)+':00',end:pad2(h+1)+':00'});}}
         style={{position:'relative',borderLeft:'1px solid var(--border-default)',background:over==='t'+d?'var(--surface-link-cell)':d===today?'var(--surface-input-cell)':'#fff'}}>
         {[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}></div>)}
         {occ.filter(e=>e.date===d&&e.start).map((e,j)=>{const [sh,sm]=e.start.split(':').map(Number);const [eh,em]=(e.end||e.start).split(':').map(Number);const top=((sh-H0)*60+sm)/60*PX;const hgt=Math.max(22,((eh-sh)*60+(em-sm))/60*PX);
-          return <div key={e.id+j} draggable={e.repeat==='none'} onDragStart={dragStart(e)} onClick={ev=>{ev.stopPropagation();onOpen(e);}}
-            style={{position:'absolute',left:3,right:3,top,height:hgt-2,background:CAL_COLOR[e.cal]+'26',borderLeft:'3px solid '+CAL_COLOR[e.cal],borderRadius:3,padding:'2px 5px',fontSize:11.5,overflow:'hidden',cursor:e.repeat==='none'?'grab':'pointer',textDecoration:e.status==='done'?'line-through':'none'}}>
+          return <div key={e.id+j} draggable={e.repeat==='none'} data-ev={e.repeat==='none'?e.id:undefined} data-title={e.title}
+            onDragStart={dragStart(e)} onDragEnd={md.end} onClick={ev=>{ev.stopPropagation();openEv(e);}}
+            style={{position:'absolute',left:3,right:3,top,height:hgt-2,background:CAL_COLOR[e.cal]+'26',borderLeft:'3px solid '+CAL_COLOR[e.cal],borderRadius:3,padding:'2px 5px',fontSize:mobile?12.5:11.5,overflow:'hidden',cursor:e.repeat==='none'?'grab':'pointer',
+              opacity:carry&&carry.id===e.id?.35:1,textDecoration:e.status==='done'?'line-through':'none'}}>
             <div style={{fontWeight:600}}>{e.title}</div><div style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}–{e.end}</div></div>;})}
       </div>)}
     </div>
-    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>일정을 다른 날짜·시간으로 끌어 옮길 수 있습니다(30분 단위, 길이 유지) · 맨 위 종일 칸에 놓으면 종일 일정으로 · 반복 일정(↻)은 이동 불가</div>
+    </div>
+    <div style={{padding:'6px 8px',fontSize:'var(--fs-sm)',color:'var(--text-label)',borderTop:'1px solid var(--border-default)'}}>{mobile?'꾹 눌렀다가 끌면 옮기고, 아래 🗑 칸에 놓으면 지웁니다':'일정을 다른 날짜·시간으로 끌어 옮기거나 아래 🗑 칸에 놓아 지웁니다'}(30분 단위, 길이 유지) · 맨 위 종일 칸에 놓으면 종일 일정으로 · 반복 일정(↻)은 이동 불가</div>
   </div>;
 }
 /* 목록: 카테고리 · 제목 · 마일스톤 · 날짜 · 상태 · 비고 + 열별 필터 */
@@ -39229,7 +39359,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.5';
+const APP_VERSION='v5.7';
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
