@@ -36610,7 +36610,10 @@ const Gmail={
   bodyOf(payload){const {plain,html}=this.partsOf(payload);return plain||this.stripHtml(html)||'';},
   toMail(msg,acc){const H={};(msg.payload.headers||[]).forEach(h=>H[h.name.toLowerCase()]=h.value);const labels=msg.labelIds||[];const d=new Date(H.date||Number(msg.internalDate));
     return {id:'g:'+msg.id,gid:msg.id,acc,folder:labels.includes('SENT')?'sent':labels.includes('DRAFT')?'draft':'inbox',from:H.from||'',to:H.to||'',cc:H.cc||'',subject:H.subject||'(제목 없음)',date:isNaN(d)?nowStamp():d.toISOString(),body:this.bodyOf(msg.payload).slice(0,20000),html:(window.sanitizeHtml?sanitizeHtml(this.partsOf(msg.payload).html):''),star:labels.includes('STARRED'),read:!labels.includes('UNREAD'),tags:[],attachments:(function(){const a=[];const w=p=>{if(!p)return;
-      if(p.filename&&p.body&&p.body.attachmentId)a.push({name:p.filename,mime:p.mimeType||'',size:p.body.size||0,gid:msg.id,aid:p.body.attachmentId});
+      if(p.filename&&p.body&&p.body.attachmentId){
+        /* 본문에 붙여 넣은 그림은 Content-ID 로 본문과 이어져 있다 — 그 값을 같이 담아 본문에 되돌려 넣는다 */
+        let cid='';(p.headers||[]).forEach(h=>{if((h.name||'').toLowerCase()==='content-id')cid=String(h.value||'').replace(/^<|>$/g,'').trim();});
+        a.push({name:p.filename,mime:p.mimeType||'',size:p.body.size||0,gid:msg.id,aid:p.body.attachmentId,cid});}
       (p.parts||[]).forEach(w);};w(msg.payload);return a;})()};},
 
   /* 첨부 내려받기 — 목록에는 이름만 담고, 열 때 실제 바이트를 가져온다 */
@@ -36999,15 +37002,18 @@ function param(v,name){const m=new RegExp(name+'(\\*)?=\\s*"?([^";]+)"?','i').ex
 /* MIME 파트를 재귀로 훑어 text/plain(우선) 또는 text/html 본문과 첨부 파일명을 모은다 */
 function mimeBody(raw,ct,cte,out){const type=(ct||'text/plain').split(';')[0].trim().toLowerCase();
   if(type.startsWith('multipart/')){const b=param(ct,'boundary');if(!b)return;const parts=('\n'+raw).split(new RegExp('\\r?\\n--'+b.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:--)?(?=\\r?\\n|$)'));
-    parts.slice(1).forEach(pt=>{const i=pt.search(/\r?\n\r?\n/);if(i<0)return;const H=parseMimeHeaders(pt.slice(0,i));mimeBody(pt.slice(i).replace(/^\r?\n\r?\n/,''),H['content-type'],H['content-transfer-encoding'],out,H['content-disposition']);});return;}
+    parts.slice(1).forEach(pt=>{const i=pt.search(/\r?\n\r?\n/);if(i<0)return;const H=parseMimeHeaders(pt.slice(0,i));mimeBody(pt.slice(i).replace(/^\r?\n\r?\n/,''),H['content-type'],H['content-transfer-encoding'],out,H['content-disposition'],H['content-id']);});return;}
   const disp=arguments[4]||'';const fn=decodeWords(param(disp,'filename')||param(ct,'name'));
-  if(/attachment/i.test(disp)||(fn&&!type.startsWith('text/'))){
-    if(!fn)return;
+  /* 본문에 붙여 넣은 그림(스크린샷 등)은 Content-ID 를 달고 첨부로 들어온다 — 나중에 본문에 되돌려 넣기 위해 함께 보관 */
+  const cid=String(arguments[5]||'').trim().replace(/^</,'').replace(/>$/,'');
+  if(/attachment|inline/i.test(disp)||cid||(fn&&!type.startsWith('text/'))){
+    if(!fn&&!cid)return;
     /* 파일 내용까지 담아 둔다 — 나중에 저장소에 올려 클릭으로 열 수 있게 */
     const e=(cte||'').toLowerCase();
     let bytes=null;
     try{bytes=/base64/.test(e)?b64Bytes(raw):/quoted-printable/.test(e)?qpBytes(raw):latin1Bytes(raw);}catch(_){}
-    out.attachments.push({name:fn,mime:type,size:bytes?bytes.length:0,bytes});
+    const name=fn||((cid.split('@')[0]||'image')+'.'+((type.split('/')[1]||'png').split('+')[0]));
+    out.attachments.push({name,mime:type,size:bytes?bytes.length:0,bytes,cid,inline:!!cid&&/inline/i.test(disp||'inline')});
     return;}
   if(!type.startsWith('text/'))return;
   const enc=(cte||'').toLowerCase();const bytes=/base64/.test(enc)?b64Bytes(raw):/quoted-printable/.test(enc)?qpBytes(raw):latin1Bytes(raw);
@@ -37116,7 +37122,9 @@ function sanitizeHtml(html){
         const n=a.name.toLowerCase(),v=String(a.value||'').trim();
         if(n.startsWith('on')){c.removeAttribute(a.name);return;}
         if(t==='img'&&n==='src'){c.removeAttribute('src');
-          if(/^https?:/i.test(v))c.setAttribute('data-src',v);return;}
+          if(/^cid:/i.test(v))c.setAttribute('data-cid',v.slice(4).replace(/^<|>$/g,''));   /* 메일에 같이 온 그림 — 바로 보여준다 */
+          else if(/^https?:/i.test(v))c.setAttribute('data-src',v);                          /* 바깥에서 받아오는 그림 — 눌러야 보인다 */
+          return;}
         if(!OK_ATTR.has(n)){c.removeAttribute(a.name);return;}
         if(n==='href'){
           if(!/^(https?:|mailto:|tel:|#)/i.test(v))c.removeAttribute('href');
@@ -37136,7 +37144,8 @@ const MAIL_CSS=`.pms-html{font:var(--fs-md2)/1.6 var(--font-sans);color:var(--te
 .pms-html a{color:var(--color-accent)}
 .pms-html blockquote{margin:6px 0 6px 10px;padding-left:10px;border-left:2px solid var(--border-strong);color:var(--text-muted)}
 .pms-html p{margin:6px 0}
-.pms-html *{max-width:100%!important}`;
+.pms-html *{max-width:100%!important}
+.pms-noimg{display:inline-block;padding:6px 10px;border:1px dashed var(--border-strong);border-radius:4px;color:var(--text-label);font-size:var(--fs-sm)}`;
 /* 글자 본문에서 주소를 눌러 열 수 있게 */
 const URL_RE=/(https?:\/\/[^\s<>"')\]]+)/g;
 function TextBody({text}){
@@ -37155,8 +37164,24 @@ function MailBody({mail}){
   React.useEffect(()=>{setMode('html');setImgOn(false);},[mail.id]);
   React.useEffect(()=>{
     const el=ref.current;if(!el||!html||mode!=='html')return;
+    let live=true;
     el.innerHTML=html;
     if(imgOn)el.querySelectorAll('img[data-src]').forEach(i=>{i.src=i.getAttribute('data-src');});
+    /* 메일에 같이 온 그림(본문에 붙여 넣은 스크린샷 등)은 바깥으로 나가지 않으므로 바로 보여준다 */
+    const byCid={};(mail.attachments||[]).map(attNorm).forEach(a=>{if(a.cid)byCid[a.cid]=a;});
+    el.querySelectorAll('img[data-cid]').forEach(async i=>{
+      const a=byCid[i.getAttribute('data-cid')];
+      if(!a){i.replaceWith(Object.assign(document.createElement('div'),{
+        className:'pms-noimg',textContent:'🖼 (그림을 불러올 수 없습니다 — 「전부 다시」로 메일을 다시 읽어 보세요)'}));return;}
+      try{
+        let u='';
+        if(a.path)u=await Files.url(a.path);                                  /* 회사 메일: 보관해 둔 파일 */
+        else if(a.gid&&a.aid){const bytes=await Gmail.attachment(a.gid,a.aid); /* Gmail: 그때그때 받아온다 */
+          u=URL.createObjectURL(new Blob([bytes],{type:a.mime||'image/png'}));}
+        if(u&&live)i.src=u;
+      }catch(_){}
+    });
+    return()=>{live=false;};
   },[html,mode,imgOn,mail.id]);
   const imgN=(html.match(/data-src=/g)||[]).length;
   if(!html)return <TextBody text={mail.body}/>;
@@ -37273,12 +37298,12 @@ async function stashAttachments(items,onStep){
     const out=[];
     for(const a0 of at){
       const a=attNorm(a0);
-      if(!a.bytes||!a.bytes.length){out.push({name:a.name,mime:a.mime,size:a.size});continue;}
+      if(!a.bytes||!a.bytes.length){out.push({name:a.name,mime:a.mime,size:a.size,cid:a.cid,inline:a.inline});continue;}
       onStep&&onStep('첨부 보관 중 '+(++n)+'/'+total+' · '+a.name);
       try{const f=new File([a.bytes],a.name||'attachment',{type:a.mime||'application/octet-stream'});
         const r=await Files.put(f);
-        out.push({name:a.name,mime:r.type||a.mime,size:r.size,path:r.path});}
-      catch(e){out.push({name:a.name,mime:a.mime,size:a.size,err:e.message});}
+        out.push({name:a.name,mime:r.type||a.mime,size:r.size,path:r.path,cid:a.cid,inline:a.inline});}
+      catch(e){out.push({name:a.name,mime:a.mime,size:a.size,cid:a.cid,inline:a.inline,err:e.message});}
     }
     it.attachments=out;
   }
@@ -37286,7 +37311,8 @@ async function stashAttachments(items,onStep){
 }
 /* 첨부 칩 — 누르면 새 탭에서 연다 */
 function AttachBar({mail,toast}){
-  const list=(mail.attachments||[]).map(attNorm).filter(a=>a.name);
+  /* 본문 안에 박힌 그림(cid)은 이미 본문에 보이므로 첨부 목록에서는 뺀다 */
+  const list=(mail.attachments||[]).map(attNorm).filter(a=>a.name&&!a.cid);
   const [busy,setBusy]=React.useState('');
   if(!list.length)return null;
   const open=async(a)=>{
@@ -39359,7 +39385,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.7';
+const APP_VERSION='v5.8';
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
