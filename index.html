@@ -36146,7 +36146,35 @@ function Splitter({onDrag,onReset}){
   </div>;
 }
 
-Object.assign(window,{usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
+/* 단추 옆에 붙는 작은 메뉴 — 자주 쓰지 않는 동작을 접어 둔다 */
+function MenuButton({label,icon,items,align,title}){
+  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const [open,setOpen]=React.useState(false);const ref=React.useRef();
+  React.useEffect(()=>{if(!open)return;
+    const off=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
+    const esc=e=>{if(e.key==='Escape')setOpen(false);};
+    document.addEventListener('mousedown',off);document.addEventListener('keydown',esc);
+    return()=>{document.removeEventListener('mousedown',off);document.removeEventListener('keydown',esc);};},[open]);
+  return <span ref={ref} style={{position:'relative',display:'inline-flex'}}>
+    <Button variant="gray" size="sm" icon={icon} title={title} onClick={()=>setOpen(o=>!o)}>{label} ▾</Button>
+    {open&&<div style={{position:'absolute',top:'100%',marginTop:4,[align==='right'?'right':'left']:0,zIndex:120,
+      minWidth:220,background:'#fff',border:'1px solid var(--border-strong)',borderRadius:6,
+      boxShadow:'0 6px 20px rgba(0,0,0,.16)',padding:4}}>
+      {(items||[]).filter(Boolean).map((it,i)=>it.sep
+        ?<div key={i} style={{height:1,background:'var(--border-default)',margin:'4px 2px'}}/>
+        :<button key={i} type="button" disabled={it.disabled} onClick={()=>{setOpen(false);it.onClick&&it.onClick();}}
+          style={{display:'block',width:'100%',textAlign:'left',border:'none',background:'transparent',
+            padding:'7px 10px',borderRadius:4,fontSize:'var(--fs-base)',fontFamily:'inherit',
+            color:it.disabled?'var(--text-label)':'var(--text-body)',cursor:it.disabled?'default':'pointer'}}
+          onMouseEnter={e=>{if(!it.disabled)e.currentTarget.style.background='var(--surface-hover)';}}
+          onMouseLeave={e=>{e.currentTarget.style.background='transparent';}}>
+          {it.label}
+          {it.sub&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:1}}>{it.sub}</div>}
+        </button>)}
+    </div>}
+  </span>;
+}
+Object.assign(window,{MenuButton,usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
 </script>
 <script type="text/babel">/* ── 첨부 파일(이미지·PDF) ─────────────────────────────────────────
    클라우드 모드 → Supabase Storage 버킷 'pms-files' (비공개, 본인 폴더만 접근)
@@ -36920,6 +36948,11 @@ function SettingsModal({open,onClose,onToast}){
         한 줄에 하나씩 적습니다. <b>@</b>로 시작하면 그 <b>도메인 전체</b>(<code>@sale.co.kr</code>), 그 밖에는 <b>주소나 보낸사람 이름에 그 글자가 들어가면</b> 걸립니다(<code>noreply@</code>, <code>newsletter</code>).
         차단된 메일은 버려지지 않고 메일 화면 <b>⛔ 차단됨</b>에 쌓이므로, 잘못 걸렀으면 골라서 되살릴 수 있습니다. 이미 가져온 메일에는 영향이 없습니다.
       </div>
+      <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>메일 계정</div>
+      <div style={{margin:'0 0 10px'}}>
+        <Button variant="classic" size="sm" icon="🔗" onClick={()=>{onClose&&onClose();setTimeout(()=>window.dispatchEvent(new Event('pms:open-accounts')),120);}}>계정 연결 · 해제</Button>
+        <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginLeft:8}}>회사 · 개인 계정을 잇고 끊습니다</span>
+      </div>
       <div style={{font:'var(--type-card-title)',margin:'10px 0 6px'}}>개인 메일 (Gmail)</div>
       <InfoBar>Google 콘솔에서 Gmail API를 켜고 OAuth 클라이언트(웹)를 만든 뒤 Client ID를 입력하면 메일 화면의 🔗 계정 연결에서 "Google 연결"이 활성화됩니다(가이드 04). 호스팅 주소에서는 pms.config.js의 gmailClientId로도 지정할 수 있습니다.</InfoBar>
       <Field label="Gmail OAuth Client ID"><TextInput value={c.gmailClientId||''} onChange={set('gmailClientId')} placeholder="xxxx.apps.googleusercontent.com"/></Field>
@@ -36975,13 +37008,28 @@ Object.assign(window,{TrashModal,Login,SettingsModal,MailFolderSection});
 </script>
 <script type="text/babel">/* 메일 관리: 계정/폴더 내비 · 목록 | 읽기 · 작성 · 가져오기 · 계정 연결 */
 const FOLDERS=[{id:'inbox',num:'①',label:'받은편지함'},{id:'starred',num:'②',label:'별표'},{id:'sent',num:'③',label:'보낸편지함'},{id:'draft',num:'④',label:'임시보관'},{id:'archive',num:'⑤',label:'보관'}];
-function mailNav(st,set,db){
+/* 폰: 메일함 머리글의 계정 고르기 — 전체 / 회사 / 개인 */
+function AccPick({db,value,onChange}){
+  const cnt=id=>db.mails.filter(m=>(id==='all'||m.acc===id)&&m.folder==='inbox'&&!m.read).length;
+  const items=[{id:'all',label:'전체'},...db.accounts.map(a=>({id:a.id,label:a.label}))];
+  return <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:14,padding:2,gap:2,flex:'0 0 auto'}}>
+    {items.map(it=>{const on=it.id===value;const n=cnt(it.id);
+      return <button key={it.id} type="button" onClick={()=>onChange(it.id)}
+        style={{border:'none',borderRadius:12,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontFamily:'inherit',
+          fontWeight:on?700:500,background:on?'var(--surface-active)':'transparent',
+          color:on?'var(--text-body)':'var(--text-muted)',cursor:'pointer',whiteSpace:'nowrap'}}>
+        {it.label}{n?<span style={{color:'var(--color-accent)',fontFamily:'var(--font-num)',marginLeft:4}}>{n}</span>:null}</button>;})}
+  </span>;
+}
+function mailNav(st,set,db,mobile){
   const cnt=id=>db.mails.filter(m=>(id==='all'||m.acc===id)&&m.folder==='inbox'&&!m.read).length;
   const badge=n=>n?<span style={{color:'var(--color-accent)',fontFamily:'var(--font-num)',marginLeft:6}}>{n}</span>:null;
   const accs=[{id:'all',label:<span>전체 메일{badge(cnt('all'))}</span>},
     ...db.accounts.map(a=>({id:a.id,label:<span style={{display:'inline-flex',alignItems:'center',paddingLeft:12}}><span style={{color:'var(--text-label)',marginRight:5,fontSize:11}}>└</span>{a.label}{badge(cnt(a.id))}</span>}))];
-  return [{label:'계정',items:accs,value:st.acc,onChange:v=>set({acc:v,sel:null,picked:[]})},
-    {label:'폴더',items:FOLDERS,value:st.folder,onChange:v=>set({folder:v,sel:null,picked:[]})}];
+  const folders={label:'폴더',items:FOLDERS,value:st.folder,onChange:v=>set({folder:v,sel:null,picked:[]})};
+  /* 폰에서는 계정 고르기를 메일함 머리글로 올렸으므로 메뉴에서는 뺀다 */
+  if(mobile)return [folders];
+  return [{label:'계정',items:accs,value:st.acc,onChange:v=>set({acc:v,sel:null,picked:[]})},folders];
 }
 /* ---------- 인코딩 유틸 ---------- */
 const CP_NAMES={949:'euc-kr',51949:'euc-kr',1200:'utf-16le',65001:'utf-8',932:'shift_jis',936:'gbk',1252:'windows-1252'};
@@ -37379,7 +37427,8 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       setDb('accounts',db.accounts.map(x=>x.id===a.id?{...x,email:pr.emailAddress||x.email,status:'connected',note:'Gmail API 연결됨 · 동기화 버튼으로 가져오기'}:x));toast('Google 연결됨 · '+pr.emailAddress);}
     catch(e){toast('⚠ '+explainGmailError(e));}setBusy('');};
   const disconnectGmail=a=>{Gmail.disconnect();setDb('accounts',db.accounts.map(x=>x.id===a.id?{...x,status:'ready',note:'Gmail API OAuth — 연결 버튼으로 다시 연결'}:x));toast('연결 해제');};
-  const syncAll=async()=>{const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');if(!targets.length){set({accOpen:true});toast('연결된 API 계정 없음 · Google 연결을 먼저 하세요');return;}
+  const syncAll=async(quiet)=>{const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');
+    if(!targets.length){if(!quiet){set({accOpen:true});toast('연결된 API 계정 없음 · Google 연결을 먼저 하세요');}return;}
     setBusy('sync');let total=0;
     try{for(const a of targets){const {added,skipped,filtered}=await Gmail.sync(a.id,db.mails,(n,all)=>toast(`🔄 ${a.label} · ${n}/${all}건 가져오는 중`));
         if(added.length){setDb('mails',[...added,...db.mails.filter(m=>!added.some(x=>x.id===m.id))]);}total+=added.length;
@@ -37444,6 +37493,17 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     const dup=read-added-blk;
     toast('파일 '+read+'개 읽음 · 새 메일 '+added+'건'+(blk?' · 차단 '+blk+'건':'')+(dup>0?' · '+dup+'개는 이미 있는 메일':''));
   };
+  /* 「동기화」 하나로: 회사 메일 폴더를 읽고, 이어서 Gmail 을 가져온다 */
+  const syncEverything=async()=>{
+    setBusy('sync');
+    try{
+      const folderOk=await MailFolder.state().catch(()=>'none');
+      if(folderOk==='ok'||folderOk==='need')await pullAll(false);
+      await syncAll(true);
+      const gm=db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected');
+      if(folderOk==='none'&&!gm)toast('가져올 곳이 없습니다 — ⚙ 설정 › 메일 연동에서 폴더나 Gmail 을 먼저 이어 주세요');
+    }finally{setBusy('');checkFolder();}
+  };
   const pf=React.useRef(pullFolder);pf.current=pullFolder;
   const qs=React.useRef(quietSync);qs.current=quietSync;
   const auto=+(Store.cfg.mailAuto||0);
@@ -37452,6 +37512,9 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const [fstat,setFstat]=React.useState('');
   const checkFolder=React.useCallback(()=>{MailFolder.state().then(setFstat).catch(()=>{});},[]);
   React.useEffect(()=>{checkFolder();},[checkFolder]);
+  /* ⚙ 설정 › 메일 연동의 「계정 연결」 단추가 이 창을 연다 */
+  React.useEffect(()=>{const on=()=>set({accOpen:true});
+    window.addEventListener('pms:open-accounts',on);return()=>window.removeEventListener('pms:open-accounts',on);},[]);
   React.useEffect(()=>{
     if(!auto)return;
     let live=true,running=false;
@@ -37514,15 +37577,20 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
   return <>
     <Card title={title} badge={<Badge tone="muted">{list.length}건</Badge>}
-      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({importOpen:true})}>가져오기</Button><Button variant="gray" size="sm" icon="📁" title="회사 메일 폴더에서 새 .eml 을 가져옵니다 (설정 › 메일 연동에서 폴더 지정)" onClick={()=>pullAll(false)}>폴더</Button>
-        <Button variant="gray" size="sm" icon="↻" title="폴더의 .eml 을 처음부터 전부 다시 읽습니다 (이미 있는 메일은 자동으로 걸러집니다)" onClick={()=>pullAll(true)}>전부 다시</Button><Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} onClick={syncAll}>{busy==='sync'?'동기화 중…':'동기화'}</Button><Button variant="gray" size="sm" icon="🧹" title="같은 메일이 두 벌 들어온 것을 합칩니다(본문·주소가 있는 쪽을 남김)" onClick={dedupeMails}>중복 정리</Button><Button variant="gray" size="sm" icon="🚫" title="광고·소셜로 분류돼 건너뛴 메일을 보고 고른 것만 가져옵니다" onClick={()=>{
-        if(!db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected')){toast('Gmail을 먼저 연결하세요');return;}
-        set({excl:(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id});}}>제외됨</Button>
-        <Button variant="gray" size="sm" icon="⛔" title="보낸사람 차단 목록에 걸려 안 가져온 회사 메일을 보고 되살립니다" onClick={()=>set({blk:true})}>차단됨{blkN?' '+blkN:''}</Button>
+      toolbar={<><Button icon="✎" onClick={()=>compose()}>새 메일</Button>
+        <Button variant="gray" size="sm" icon="🔄" disabled={busy==='sync'} title="회사 메일 폴더와 Gmail 을 한 번에 확인합니다" onClick={syncEverything}>{busy==='sync'?'동기화 중…':'동기화'}</Button>
+        <MenuButton icon="⋯" label="더보기" title="자주 쓰지 않는 가져오기 동작" items={[
+          {label:'↻ 폴더를 처음부터 다시 읽기',sub:'회사 메일 .eml 을 전부 다시 — 중복은 자동으로 걸러집니다',onClick:()=>pullAll(true)},
+          {label:'🧹 중복 정리',sub:'같은 메일이 두 벌 들어온 것을 합칩니다',onClick:dedupeMails},
+          {sep:true},
+          {label:'📥 파일에서 가져오기',sub:'.eml 파일을 직접 올립니다',onClick:()=>set({importOpen:true})},
+        ]}/>
+        <Button variant="gray" size="sm" icon="🚫" title="필터·차단 규칙에 걸려 안 가져온 메일을 보고 되살립니다"
+          onClick={()=>set({skipOpen:true})}>안 가져온 메일{blkN?' '+blkN:''}</Button>
         {fstat==='need'&&<Button variant="danger" size="sm" icon="⚠" title="브라우저를 껐다 켜면 폴더 권한이 풀립니다 — 눌러서 다시 허용하세요" onClick={async()=>{await pullAll(false);checkFolder();}}>폴더 권한 필요</Button>}
         {auto>0&&<Badge tone={fstat==='need'?'warn':'pill'} title={'설정 › 메일 연동에서 바꿉니다 · 마지막 확인 '+agoText(lastRun)}>⏱ 자동 {auto}분 · {agoText(lastRun)}</Badge>}
         {!auto&&<Badge tone="warn" style={{cursor:'pointer'}} title="설정 › 메일 연동 › 자동 동기화 주기에서 켭니다" onClick={openSettings}>⏱ 자동 꺼짐</Badge>}</>}
-      toolbarRight={<>{!mobile&&<Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/>}<TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:mobile?150:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}<Button variant="classic" size="sm" icon="🔗" onClick={()=>set({accOpen:true})}>계정 연결</Button></>}>
+      toolbarRight={<>{mobile&&<AccPick db={db} value={st.acc} onChange={v=>set({acc:v,sel:null,picked:[]})}/>}{!mobile&&<Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/>}<TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:mobile?150:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}</>}>
       {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)',flexWrap:'wrap'}}>
         <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>건 선택
         <Button variant="gray" size="xs" onClick={()=>bulk({read:true},'읽음 처리')}>✓ 읽음</Button>
@@ -37582,10 +37650,10 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       </div>)}
       <div style={{marginTop:10}}><Button variant="ghost" size="sm" onClick={()=>{set({accOpen:false});openSettings('mail');}}>⚙ 연동 설정 열기</Button></div>
     </Modal>
-    <BlockedModal open={!!st.blk} toast={toast} onClose={()=>{set({blk:false});setBlkN(Blocked.list().length);}}
-      onRestore={mails=>importMails(mails,folderAcc())}/>
-    <ExcludedModal open={!!st.excl} acc={st.excl} toast={toast} onClose={()=>set({excl:null})}
-      onRestore={mails=>setDb('mails',[...mails,...db.mails.filter(m=>!mails.some(x=>x.id===m.id))])}/>
+    <SkippedModal open={!!st.skipOpen} db={db} toast={toast}
+      onClose={()=>{set({skipOpen:false});setBlkN(Blocked.list().length);}}
+      onRestoreBlocked={mails=>importMails(mails,folderAcc())}
+      onRestoreExcluded={mails=>setDb('mails',[...mails,...db.mails.filter(m=>!mails.some(x=>x.id===m.id))])}/>
     <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null,picked:[]})}/>
   </>;
 }
@@ -37597,12 +37665,34 @@ function MailRow({m,on,picked,onPick,acc,onClick,onStar}){const [h,setH]=React.u
     <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{(m.body||'').split('\n')[0]}</div></div>
   <div onClick={onClick} style={{textAlign:'right',fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',cursor:'pointer'}}>{fmtDT(m.date)}<div style={{marginTop:3,color:acc.provider==='gmail'?'var(--color-success)':'var(--color-accent)',fontFamily:'var(--font-sans)'}}>{acc.label||''}</div></div>
 </div>;}
-/* 차단 목록에 걸려 안 가져온 회사 메일 — 보고 고른 것만 되살린다 */
-function BlockedModal({open,onClose,onRestore,toast}){
-  const {Button,Modal,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
-  const [rows,setRows]=React.useState([]);const [pick,setPick]=React.useState([]);
-  React.useEffect(()=>{if(open){setRows(Blocked.list().slice().reverse());setPick([]);}},[open]);
+/* 안 가져온 메일 한 곳에서 보기 — ① 회사 메일 차단 목록 ② Gmail 필터 제외 */
+function SkippedModal({open,db,onClose,onRestoreBlocked,onRestoreExcluded,toast}){
+  const {Modal,Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const gmailAcc=(db.accounts.find(a=>a.provider==='gmail'&&a.status==='connected')||{}).id||'';
+  const [tab,setTab]=React.useState('block');
+  React.useEffect(()=>{if(open)setTab('block');},[open]);
   if(!open)return null;
+  const nBlock=Blocked.list().length;
+  const TabBtn=({id,children})=><button type="button" onClick={()=>setTab(id)}
+    style={{border:'none',background:'transparent',padding:'6px 12px',fontSize:'var(--fs-md)',fontFamily:'inherit',
+      fontWeight:tab===id?600:500,color:tab===id?'var(--text-body)':'var(--text-muted)',
+      borderBottom:tab===id?'2px solid var(--wb-ink)':'2px solid transparent',cursor:'pointer'}}>{children}</button>;
+  return <Modal open={open} onClose={onClose} title="안 가져온 메일" width={780}
+    footer={<Button variant="gray" onClick={onClose}>닫기</Button>}>
+    <div style={{display:'flex',gap:4,borderBottom:'1px solid var(--border-default)',marginBottom:10}}>
+      <TabBtn id="block">⛔ 차단 목록{nBlock?' · '+nBlock:''}</TabBtn>
+      <TabBtn id="excl">🚫 Gmail 필터 제외</TabBtn>
+    </div>
+    {tab==='block'
+      ? <BlockedBody toast={toast} onRestore={ms=>{onRestoreBlocked(ms);}}/>
+      : (gmailAcc?<ExcludedBody acc={gmailAcc} toast={toast} onRestore={onRestoreExcluded} onClose={onClose}/>
+                 :<div style={{padding:28,textAlign:'center',color:'var(--text-label)'}}>Gmail 이 연결되어 있지 않습니다 — ⚙ 설정 › 메일 연동에서 이어 주세요</div>)}
+  </Modal>;
+}
+/* 차단 목록에 걸려 안 가져온 회사 메일 — 보고 고른 것만 되살린다 */
+function BlockedBody({onRestore,toast}){
+  const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [rows,setRows]=React.useState(()=>Blocked.list().slice().reverse());const [pick,setPick]=React.useState([]);
   const keyOf=m=>m.file||m.subject;
   const toggle=k=>setPick(p=>p.includes(k)?p.filter(x=>x!==k):[...p,k]);
   const restore=()=>{
@@ -37611,46 +37701,50 @@ function BlockedModal({open,onClose,onRestore,toast}){
     Blocked.remove(pick);setRows(rows.filter(m=>!pick.includes(keyOf(m))));setPick([]);
     toast(sel.length+'건 되살림');
   };
-  return <Modal open={open} onClose={onClose} title="차단 목록에 걸린 메일" width={760}
-    footer={<><Button variant="ghost" onClick={()=>{if(rows.length){Blocked.clear();setRows([]);setPick([]);toast('보관함을 비웠습니다');}}}>보관함 비우기</Button>
-      <span style={{flex:1}}/><Button variant="gray" onClick={onClose}>닫기</Button>
-      <Button disabled={!pick.length} onClick={restore}>{pick.length?pick.length+'건 되살리기':'되살리기'}</Button></>}>
-    <InfoBar>설정 › 메일 연동의 <b>보낸사람 차단 목록</b>에 걸려 가져오지 않은 메일입니다. 이 목록은 이 브라우저에만 남고, 최근 300건까지 보관합니다.</InfoBar>
+  return <>
+    <InfoBar>설정 › 메일 연동의 <b>보낸사람 차단 목록</b>에 걸려 가져오지 않은 회사 메일입니다. 이 목록은 이 브라우저에만 남고, 최근 300건까지 보관합니다.</InfoBar>
     {!rows.length&&<div style={{padding:28,textAlign:'center',color:'var(--text-label)'}}>차단된 메일 없음</div>}
-    {rows.map(m=><label key={keyOf(m)} style={{display:'grid',gridTemplateColumns:'20px 1fr 150px 92px',gap:8,alignItems:'start',padding:'7px 2px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',fontSize:'var(--fs-base)'}}>
-      <input type="checkbox" checked={pick.includes(keyOf(m))} onChange={()=>toggle(keyOf(m))}/>
-      <span style={{minWidth:0,overflow:'hidden'}}><span style={{fontWeight:600,display:'block',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.subject}</span>
-        <span style={{color:'var(--text-muted)',fontSize:'var(--fs-sm)'}}>{m.from}</span></span>
-      <Badge tone="muted">규칙: {m.rule}</Badge>
-      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',textAlign:'right'}}>{fmtDT(m.date)}</span>
-    </label>)}
-  </Modal>;
+    {rows.length>0&&<>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 2px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)',color:'var(--text-label)'}}>
+        <input type="checkbox" checked={pick.length===rows.length} onChange={()=>setPick(pick.length===rows.length?[]:rows.map(keyOf))}/>
+        전체 선택 <span style={{marginLeft:'auto'}}>{rows.length}건</span>
+      </div>
+      <div style={{maxHeight:400,overflowY:'auto'}}>
+        {rows.map(m=><label key={keyOf(m)} style={{display:'grid',gridTemplateColumns:'20px 1fr 150px 92px',gap:8,alignItems:'start',padding:'7px 2px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',fontSize:'var(--fs-base)'}}>
+          <input type="checkbox" checked={pick.includes(keyOf(m))} onChange={()=>toggle(keyOf(m))}/>
+          <span style={{minWidth:0,overflow:'hidden'}}><span style={{fontWeight:600,display:'block',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{m.subject}</span>
+            <span style={{color:'var(--text-muted)',fontSize:'var(--fs-sm)'}}>{m.from}</span></span>
+          <Badge tone="muted">규칙: {m.rule}</Badge>
+          <span style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',fontFamily:'var(--font-num)',textAlign:'right'}}>{fmtDT(m.date)}</span>
+        </label>)}
+      </div>
+      <div style={{display:'flex',gap:6,marginTop:10}}>
+        <Button variant="ghost" size="sm" onClick={()=>{Blocked.clear();setRows([]);setPick([]);toast('보관함을 비웠습니다');}}>보관함 비우기</Button>
+        <span style={{flex:1}}/>
+        <Button disabled={!pick.length} onClick={restore}>{pick.length?pick.length+'건 되살리기':'되살리기'}</Button>
+      </div>
+    </>}
+  </>;
 }
 /* 필터에 걸려 안 가져온 메일 — 목록을 보고 고른 것만 되살린다 */
-function ExcludedModal({open,acc,onClose,onRestore,toast}){
-  const {Button,Modal,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+function ExcludedBody({acc,onRestore,onClose,toast}){
+  const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const [rows,setRows]=React.useState(null);const [pick,setPick]=React.useState([]);
   const [busy,setBusy]=React.useState('');const [err,setErr]=React.useState('');
   const load=async()=>{setBusy('list');setErr('');setRows(null);setPick([]);
     try{setRows(await Gmail.excludedList((n,all)=>setBusy('목록 '+n+'/'+all)));}
     catch(e){setErr(explainGmailError(e));setRows([]);}
     setBusy('');};
-  React.useEffect(()=>{if(open)load();},[open]);
-  if(!open)return null;
+  React.useEffect(()=>{load();},[]);
   const toggle=g=>setPick(p=>p.includes(g)?p.filter(x=>x!==g):[...p,g]);
   const restore=async()=>{if(!pick.length)return;setBusy('가져오는 중…');
     try{const mails=await Gmail.fetchByIds(acc,pick,(n,all)=>setBusy('가져오는 중 '+n+'/'+all));
-      onRestore(mails);toast(mails.length+'건 되살림');onClose();}
+      onRestore(mails);toast(mails.length+'건 되살림');onClose&&onClose();}
     catch(e){setErr(explainGmailError(e));}
     setBusy('');};
   const TONE={광고:'muted',소셜:'blue',스팸:'warn',기타:'pill'};
-  return <Modal open={open} onClose={onClose} title="필터로 제외된 메일" width={720}
-    footer={<><Button variant="ghost" size="sm" onClick={load} disabled={!!busy}>다시 불러오기</Button>
-      <span style={{marginLeft:'auto',display:'flex',gap:6}}>
-        <Button variant="gray" onClick={onClose}>닫기</Button>
-        <Button variant="accent" icon="📥" disabled={!pick.length||!!busy} onClick={restore}>{busy&&busy!=='list'?busy:'선택한 '+pick.length+'건 가져오기'}</Button>
-      </span></>}>
-    <InfoBar>동기화할 때 <b>광고 · 소셜 · 스팸</b>으로 분류돼 건너뛴 메일입니다. 제목과 보낸 사람만 가볍게 불러왔고, 고른 것만 본문까지 받아 받은편지함에 넣습니다.</InfoBar>
+  return <>
+    <InfoBar>동기화할 때 <b>광고 · 소셜 · 스팸</b>으로 분류돼 건너뛴 Gmail 메일입니다. 제목과 보낸 사람만 가볍게 불러왔고, 고른 것만 본문까지 받아 받은편지함에 넣습니다.</InfoBar>
     {err&&<InfoBar tone="warn">{err}</InfoBar>}
     {busy==='list'||/^목록/.test(busy)?<div style={{padding:20,color:'var(--text-label)',textAlign:'center'}}>{busy==='list'?'불러오는 중…':busy}</div>:null}
     {rows&&!rows.length&&!busy&&<div style={{padding:26,color:'var(--text-label)',textAlign:'center'}}>제외된 메일이 없습니다</div>}
@@ -37671,8 +37765,13 @@ function ExcludedModal({open,acc,onClose,onRestore,toast}){
           <span style={{textAlign:'right',color:'var(--text-label)',fontFamily:'var(--font-num)',fontSize:'var(--fs-sm)'}}>{fmtDT(r.date)}</span>
         </label>)}
       </div>
+      <div style={{display:'flex',gap:6,marginTop:10}}>
+        <Button variant="ghost" size="sm" onClick={load} disabled={!!busy}>다시 불러오기</Button>
+        <span style={{flex:1}}/>
+        <Button variant="accent" icon="📥" disabled={!pick.length||!!busy} onClick={restore}>{busy&&busy!=='list'?busy:'선택한 '+pick.length+'건 가져오기'}</Button>
+      </div>
     </>}
-  </Modal>;
+  </>;
 }
 function ComposeModal({draft,accounts,onClose,onSend}){
   const {Button,Modal}=window.HDWorkbookDesignSystem_ad60e4;const [d,setD]=React.useState(draft);React.useEffect(()=>setD(draft),[draft]);if(!d)return null;
@@ -37702,7 +37801,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,FOLDERS,ExcludedModal,BlockedModal,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,AccPick,FOLDERS,SkippedModal,BlockedBody,ExcludedBody,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리 · 마일스톤 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -39385,7 +39484,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v5.8';
+const APP_VERSION='v5.9';
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
@@ -39421,8 +39520,6 @@ function MobileBar({canBack,canFwd,onBack,onFwd,zone,onZone,badges}){
   return <div style={{position:'fixed',left:0,right:0,bottom:0,zIndex:60,display:'flex',alignItems:'stretch',
     background:'rgba(255,255,255,.97)',backdropFilter:'blur(8px)',borderTop:'1px solid var(--border-default)',
     paddingBottom:'env(safe-area-inset-bottom)',boxShadow:'0 -1px 6px rgba(0,0,0,.05)'}}>
-    <Btn dis={!canBack} onClick={onBack} label="뒤로"><span style={{fontSize:19,lineHeight:1}}>‹</span><T>뒤로</T></Btn>
-    <Btn dis={!canFwd} onClick={onFwd} label="앞으로"><span style={{fontSize:19,lineHeight:1}}>›</span><T>앞으로</T></Btn>
     {['mail','cal','kb'].map(z=>{const on=zone===z;const n=(badges||{})[z];
       return <Btn key={z} on={on} onClick={()=>onZone(z)} label={lab[z]}>
         <span style={{fontSize:16,lineHeight:1,position:'relative'}}>{ico[z]}
@@ -39432,6 +39529,9 @@ function MobileBar({canBack,canFwd,onBack,onFwd,zone,onZone,badges}){
         <T on={on}>{lab[z]}</T>
         <span style={{width:16,height:2,borderRadius:1,background:on?'var(--wb-ink)':'transparent'}}/>
       </Btn>;})}
+    <span style={{width:1,alignSelf:'center',height:26,background:'var(--border-default)'}}/>
+    <Btn dis={!canBack} onClick={onBack} label="뒤로"><span style={{fontSize:19,lineHeight:1}}>‹</span><T>뒤로</T></Btn>
+    <Btn dis={!canFwd} onClick={onFwd} label="앞으로"><span style={{fontSize:19,lineHeight:1}}>›</span><T>앞으로</T></Btn>
   </div>;
 }
 function Shell({user,onLogout}){
@@ -39537,7 +39637,7 @@ function Shell({user,onLogout}){
   if(err)return <div style={{padding:40}}><InfoBar tone="warn">{err}</InfoBar><Button variant="gray" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button><SettingsModal open={cfgOpen} onClose={()=>setCfg(false)} onToast={toast}/></div>;
   if(!db)return <div style={{padding:40,color:'var(--text-label)'}}>데이터 불러오는 중…</div>;
   const merge=set=>p=>set(s=>({...s,...p}));
-  const nav={mail:mailNav(mailSt,merge(setMailSt),db),cal:calNav(calSt,merge(setCalSt)),kb:kbNav(kbSt,merge(setKbSt),db)}[zone];
+  const nav={mail:mailNav(mailSt,merge(setMailSt),db,mobile),cal:calNav(calSt,merge(setCalSt)),kb:kbNav(kbSt,merge(setKbSt),db)}[zone];
   const unread=db.mails.filter(m=>m.folder==='inbox'&&!m.read).length;const todayN=expandEvents(db.events,todayISO(),todayISO()).length;
   const savedBadge=saved==='saving'?'⏳ 저장 중…':saved==='error'?'⚠ 저장 실패':saved?'✓ 자동저장됨 · '+saved:'✓ 불러옴';
   return <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#fff'}}>
