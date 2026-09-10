@@ -37900,9 +37900,11 @@ function catColor(cat){
   return CAT_PALETTE[h%CAT_PALETTE.length];
 }
 /* 제목 앞에 붙는 카테고리 꼬리표 */
-function CatTag({cat,fs}){
+function CatTag({cat,fs,inline}){
   if(!cat)return null;const c=catColor(cat);
-  return <span title={'카테고리 · '+cat} style={{flex:'0 0 auto',display:'inline-block',maxWidth:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+  return <span title={'카테고리 · '+cat} style={{flex:inline?undefined:'0 0 auto',display:'inline-block',
+    maxWidth:inline?100:80,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+    marginRight:inline?4:0,verticalAlign:inline?'1px':undefined,
     background:c+'22',color:c,border:'1px solid '+c+'55',borderRadius:3,padding:'0 4px',
     fontSize:Math.max(9,(fs||11)-1.5),fontWeight:700,lineHeight:1.5}}>{cat}</span>;
 }
@@ -37990,22 +37992,33 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   </>;
 }
 
-function EvChip({e,onClick,compact,draggable,onDragStart,onDragEnd,carrying,fs,touch,pos}){
+function EvChip({e,onClick,compact,draggable,onDragStart,onDragEnd,carrying,fs,touch,pos,wrap}){
+  const head=!pos||pos==='one'||pos==='first';
   /* touch=true(폰)면 HTML5 끌기를 끈다 — 안드로이드에서 길게 누르면 브라우저가 제 끌기를 시작하며
      우리 동작을 취소시켜 버린다. 글자 선택과 스크롤 가로채기도 같은 이유로 막는다 */
   return <div draggable={touch?false:draggable} onDragStart={onDragStart} onDragEnd={onDragEnd} onClick={ev=>{ev.stopPropagation();onClick(e);}} title={(e.category?'['+e.category+'] ':'')+e.title}
     data-ev={draggable?e.id:undefined} data-title={e.title}
-    style={{display:'flex',alignItems:'center',gap:4,padding:compact?'1px 5px':'2px 6px',
+    style={{display:'flex',alignItems:wrap?'flex-start':'center',gap:4,padding:compact?(wrap?'2px 5px':'1px 5px'):'2px 6px',
       borderRadius:pos==='mid'?0:pos==='first'?'3px 0 0 3px':pos==='last'?'0 3px 3px 0':3,
       marginRight:pos==='first'||pos==='mid'?-6:0,marginLeft:pos==='last'||pos==='mid'?-6:0,
-      background:CAL_COLOR[e.cal]+'1f',borderLeft:pos==='mid'||pos==='last'?'none':'2px solid '+CAL_COLOR[e.cal],fontSize:fs||(compact?11:12),color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis',
+      background:CAL_COLOR[e.cal]+'1f',borderLeft:pos==='mid'||pos==='last'?'none':'2px solid '+CAL_COLOR[e.cal],fontSize:fs||(compact?11:12),color:e.status==='done'?'var(--text-label)':'var(--text-body)',textDecoration:e.status==='done'?'line-through':'none',cursor:draggable?'grab':'pointer',overflow:'hidden',whiteSpace:wrap?'normal':'nowrap',textOverflow:'ellipsis',
       opacity:carrying?.35:1,outline:carrying?'1px dashed '+CAL_COLOR[e.cal]:'none',
       touchAction:touch&&draggable?'none':undefined,
       WebkitUserSelect:'none',userSelect:'none',WebkitTouchCallout:'none'}}>
-    {(!pos||pos==='one'||pos==='first')&&<CatTag cat={e.category} fs={fs||(compact?11:12)}/>}
-    {e.start&&(!pos||pos==='one'||pos==='first')&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
-    <span style={{overflow:'hidden',textOverflow:'ellipsis',opacity:pos==='mid'||pos==='last'?.6:1}}>
-      {(pos==='mid'||pos==='last')?'↳ '+(e.title||''):(e.title||'(제목 없음)')}</span>
+    {/* 두 줄로 접을 때는 꼬리표·시각을 제목과 같은 흐름에 두어야 둘째 줄이 칸 너비를 다 쓴다 */}
+    {wrap
+      ? <span style={{minWidth:0,flex:1,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden',
+          wordBreak:'break-word',lineHeight:1.34,opacity:pos==='mid'||pos==='last'?.6:1}}>
+          {head&&<CatTag cat={e.category} fs={fs||11} inline/>}
+          {head&&e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)',marginRight:3}}>{e.start}</span>}
+          {(pos==='mid'||pos==='last')?'↳ '+(e.title||''):(e.title||'(제목 없음)')}
+        </span>
+      : <>
+          {head&&<CatTag cat={e.category} fs={fs||(compact?11:12)}/>}
+          {head&&e.start&&<span style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}</span>}
+          <span style={{overflow:'hidden',textOverflow:'ellipsis',opacity:pos==='mid'||pos==='last'?.6:1}}>
+            {(pos==='mid'||pos==='last')?'↳ '+(e.title||''):(e.title||'(제목 없음)')}</span>
+        </>}
     {e.status==='doing'&&<span style={{color:CAL_COLOR[e.cal],fontSize:9}}>◐</span>}
     {e.repeat!=='none'&&<span style={{color:'var(--text-label)'}}>↻</span>}</div>;
 }
@@ -38140,7 +38153,7 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
   /* 폰에서는 글자와 칸을 키우고, 배율이 1을 넘으면 가로로 넘겨 본다 */
   /* 글자는 살짝만 키우고 "칸 너비"를 늘린다 — 2× 면 한 칸이 130px 남짓이라 제목 10글자쯤 들어간다 */
   const cellW=Math.round(66*z);
-  const cellH=mobile?(z>=2?116:z>=1.5?106:96):96;
+  const cellH=mobile?(z>=2?132:z>=1.5?120:104):96;
   const fs=mobile?(z>=1.5?12.5:11.5):11;
   const maxShow=mobile?(z>=2?4:3):3;
   const inner={minWidth:mobile&&z>1?(7*cellW)+'px':'auto'};
@@ -38167,7 +38180,7 @@ function MonthGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
           {d===today&&<span style={{fontSize:10,marginLeft:'auto',color:'var(--color-accent)'}}>오늘</span>}
         </div>
         <div style={{display:'flex',flexDirection:'column',gap:2}}>
-          {es.slice(0,maxShow).map((e,j)=><EvChip key={e.id+j} e={e} pos={e._pos} onClick={openEv} compact fs={fs} touch={mobile} draggable={e.repeat==='none'&&(e._pos==='one'||e._pos==='first')} carrying={!!carry&&carry.id===e.id}
+          {es.slice(0,maxShow).map((e,j)=><EvChip key={e.id+j} e={e} pos={e._pos} onClick={openEv} compact fs={fs} touch={mobile} wrap={mobile} draggable={e.repeat==='none'&&(e._pos==='one'||e._pos==='first')} carrying={!!carry&&carry.id===e.id}
             onDragStart={ev=>{ev.dataTransfer.setData('text/pms-event',e.id);ev.dataTransfer.effectAllowed='move';md.start();}} onDragEnd={md.end}/>)}
           {items>maxShow&&<span style={{fontSize:10.5,color:'var(--text-label)'}}>+{items-maxShow}</span>}
         </div></div>;})}</div>
@@ -38230,7 +38243,7 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
         <div style={{fontFamily:'var(--font-num)',fontWeight:700,fontSize:15,color:d===today?'var(--color-accent)':hol?'var(--color-danger)':'var(--text-body)'}}>{dt.getDate()}</div>
         {hol&&<div style={{fontSize:10,color:'var(--color-danger)'}}>{hol.replace(/^대체공휴일\((.*)\)$/,'$1 대체')}</div>}
         <div style={{display:'flex',flexDirection:'column',gap:2,marginTop:3,minHeight:16}}>
-          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} pos={e._pos} onClick={openEv} compact fs={mobile?(z>=1.5?12.5:11.5):11} touch={mobile} draggable={e.repeat==='none'&&(e._pos==='one'||e._pos==='first')} carrying={!!carry&&carry.id===e.id} onDragStart={dragStart(e)} onDragEnd={md.end}/>)}
+          {allDay(d).map((e,j)=><EvChip key={e.id+j} e={e} pos={e._pos} onClick={openEv} compact fs={mobile?(z>=1.5?12.5:11.5):11} touch={mobile} wrap={mobile} draggable={e.repeat==='none'&&(e._pos==='one'||e._pos==='first')} carrying={!!carry&&carry.id===e.id} onDragStart={dragStart(e)} onDragEnd={md.end}/>)}
           </div></div>;})}</div>
     <div style={{display:'grid',gridTemplateColumns:cols,position:'relative'}}>
       <div>{[...Array(H1-H0)].map((_,i)=><div key={i} style={{height:PX,fontFamily:'var(--font-num)',fontSize:11,color:'var(--text-label)',textAlign:'right',paddingRight:6,borderBottom:'1px solid var(--border-default)',boxSizing:'border-box'}}>{pad2(H0+i)}:00</div>)}</div>
@@ -38245,7 +38258,7 @@ function WeekGrid({events,anchor,today,onOpen,onNew,onMove,onDelete,zoom}){
               opacity:carry&&carry.id===e.id?.35:1,textDecoration:e.status==='done'?'line-through':'none',
               touchAction:mobile&&e.repeat==='none'?'none':undefined,
               WebkitUserSelect:'none',userSelect:'none',WebkitTouchCallout:'none'}}>
-            <div style={{fontWeight:600}}>{e.title}</div><div style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}–{e.end}</div></div>;})}
+            <div style={{fontWeight:600,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden',wordBreak:'break-word',lineHeight:1.3}}>{e.title}</div><div style={{fontFamily:'var(--font-num)',color:'var(--text-muted)'}}>{e.start}–{e.end}</div></div>;})}
       </div>)}
     </div>
     </div>
@@ -39637,7 +39650,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v6.2';
+const APP_VERSION='v6.3';
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
