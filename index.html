@@ -35821,6 +35821,16 @@ const Store={
   key(kind){return 'pms.data.'+this.user.id+'.'+kind;},
   trashKey(){return 'pms.trash.'+this.user.id;},
   setSnap(db){KINDS.forEach(k=>{this.snap[k]=new Map((db[k]||[]).map(x=>[x.id,JSON.stringify(x)]));});},
+  /* 다른 기기가 바꾼 것만 가져오기 — 바뀐 행만 골라 오므로 가볍다.
+     행 단위 저장(pms_items)이 아니면 null 을 돌려주고, 그때는 통째로 다시 불러온다 */
+  async pull(since){
+    if(this.mode!=='supabase'||!this.rowMode)return null;
+    let q=this.sb.from('pms_items').select('kind,item_id,data,deleted_at,updated_at').eq('user_id',this.user.id);
+    if(since)q=q.gt('updated_at',since);
+    const {data,error}=await q;
+    if(error){if(isMissingTable(error))return null;throw new Error(explainSbError(error));}
+    return data||[];
+  },
   async loadAll(){
     const db={};
     if(this.mode==='supabase'){
@@ -36181,7 +36191,31 @@ function MenuButton({label,icon,items,align,title}){
     </div>}
   </span>;
 }
-Object.assign(window,{MenuButton,usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
+/* ── 알림 ────────────────────────────────────────────
+   브라우저가 띄우는 알림(Notification). 이 앱 탭이 살아 있는 동안만 동작한다.
+   https 로 열었을 때만 쓸 수 있고(홈 화면 앱 포함), 파일로 직접 연 경우엔 지원되지 않는다 */
+const Notify={
+  supported(){return typeof Notification!=='undefined';},
+  state(){return this.supported()?Notification.permission:'unsupported';},
+  ok(){return this.supported()&&Notification.permission==='granted';},
+  async ask(){
+    if(!this.supported())throw new Error('이 브라우저는 알림을 지원하지 않습니다');
+    if(Notification.permission==='denied')throw new Error('브라우저에서 알림이 차단되어 있습니다 — 주소창 왼쪽 자물쇠에서 허용으로 바꿔 주세요');
+    const r=await Notification.requestPermission();
+    if(r!=='granted')throw new Error('알림이 허용되지 않았습니다');
+    return true;
+  },
+  /* tag 를 주면 같은 tag 의 알림은 새 것으로 갈아끼운다(같은 알림이 쌓이지 않게) */
+  show(title,body,tag){
+    if(!this.ok())return null;
+    try{
+      const n=new Notification(title,{body:body||'',tag:tag||'pms',icon:'icon-192.png',badge:'icon-192.png'});
+      n.onclick=()=>{try{window.focus();}catch(_){}n.close();};
+      return n;
+    }catch(_){return null;}
+  },
+};
+Object.assign(window,{Notify,MenuButton,usePaneSize,Splitter,useMobile,BackBar,stripCode,HOLIDAYS,holidayOf,isRestDay,STATUS_KEYS,Markdown,renderInline,wikiLinks,toICS,fromICS,expandEvents,inputStyle,Field,TextInput,Select,Chip,CAL_COLOR,CAL_LABEL,STATUS_LABEL,PRI_LABEL,fmtDT});
 </script>
 <script type="text/babel">/* ── 첨부 파일(이미지·PDF) ─────────────────────────────────────────
    클라우드 모드 → Supabase Storage 버킷 'pms-files' (비공개, 본인 폴더만 접근)
@@ -36924,7 +36958,7 @@ function SettingsModal({open,onClose,onToast}){
   const set=k=>e=>setC({...c,[k]:e.target.value});
   const prevUrl=Store.cfg.supabaseUrl||'',prevKey=Store.cfg.supabaseKey||'';
   const save=()=>{const clean={...c,supabaseUrl:(c.supabaseUrl||'').trim().replace(/\/+$/,''),supabaseKey:(c.supabaseKey||'').trim()};Store.saveCfg(clean);onClose();if(clean.supabaseUrl!==prevUrl||clean.supabaseKey!==prevKey)setTimeout(()=>location.reload(),300);else onToast&&onToast('설정 저장');};
-  const tabs=[{id:'cloud',label:'☁ 저장/계정'},{id:'mail',label:'✉ 메일 연동'},{id:'ai',label:'🤖 Claude'},{id:'stt',label:'🎙 음성'}];
+  const tabs=[{id:'cloud',label:'☁ 저장/계정'},{id:'mail',label:'✉ 메일 연동'},{id:'noti',label:'🔔 알림'},{id:'ai',label:'🤖 Claude'},{id:'stt',label:'🎙 음성'}];
   return <Modal open={open} onClose={onClose} title="연결 설정" width={560} footer={<><Button variant="gray" onClick={onClose}>취소</Button><Button variant="accent" icon="💾" onClick={save}>저장</Button></>}>
     <div style={{display:'flex',gap:4,borderBottom:'1px solid var(--border-default)',marginBottom:12}}>{tabs.map(t=><button key={t.id} type="button" onClick={()=>setTab(t.id)} style={{border:'none',background:'transparent',padding:'6px 10px',fontSize:'var(--fs-md)',fontWeight:tab===t.id?600:500,color:tab===t.id?'var(--text-body)':'var(--text-muted)',borderBottom:tab===t.id?'2px solid var(--wb-ink)':'2px solid transparent',cursor:'pointer',fontFamily:'inherit'}}>{t.label}</button>)}</div>
     {tab==='cloud'&&<>
@@ -36985,11 +37019,53 @@ function SettingsModal({open,onClose,onToast}){
         Gmail이 <b>연결된 상태</b>에서, 이 앱 탭이 열려 있는 동안만 돕니다. 새 메일이 있을 때만 알림이 뜹니다. Gmail API 무료 한도는 넉넉하지만 배터리를 아끼려면 5분 이상을 권합니다.
       </div>
     </>}
+    {tab==='noti'&&<NotiTab c={c} setC={setC} onToast={onToast}/>}
     {tab==='ai'&&<ClaudeTab c={c} setC={setC}/>}
     {tab==='stt'&&<SttTab c={c} setC={setC}/>}
   </Modal>;
 }
 
+function NotiTab({c,setC,onToast}){
+  const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [st,setSt]=React.useState(()=>Notify.state());
+  const ask=async()=>{try{await Notify.ask();setSt(Notify.state());onToast&&onToast('알림이 허용되었습니다');}
+    catch(e){setSt(Notify.state());onToast&&onToast('⚠ '+e.message);}};
+  const Line=({k,label,sub,def})=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'8px 10px',marginBottom:6,
+      border:'1px solid var(--border-default)',borderRadius:4,cursor:'pointer'}}>
+    <input type="checkbox" checked={c[k]===undefined?!!def:!!c[k]} onChange={e=>setC({...c,[k]:e.target.checked})} style={{marginTop:3}}/>
+    <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span>
+      <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2,lineHeight:1.55}}>{sub}</div></span>
+  </label>;
+  return <>
+    <InfoBar>이 앱 <b>탭이 열려 있는 동안</b> 윈도우·안드로이드 알림으로 알려 드립니다. 탭을 닫으면 알림도 멈춥니다(휴대폰 푸시가 아닙니다). <code>https</code> 주소나 홈 화면 앱에서만 동작합니다.</InfoBar>
+    <div style={{display:'flex',alignItems:'center',gap:8,margin:'10px 0 14px',flexWrap:'wrap'}}>
+      <Badge tone={st==='granted'?'linked':st==='denied'?'warn':'pill'}>
+        {st==='granted'?'✓ 알림 허용됨':st==='denied'?'✕ 브라우저에서 차단됨':st==='unsupported'?'지원하지 않는 브라우저':'허용 필요'}
+      </Badge>
+      {st!=='granted'&&st!=='unsupported'&&<Button variant="classic" size="sm" icon="🔔" onClick={ask}>알림 허용하기</Button>}
+      {st==='granted'&&<Button variant="gray" size="sm" onClick={()=>{Notify.show('🔔 PMS 알림 확인','이렇게 보입니다','pms-test');onToast&&onToast('알림을 보냈습니다');}}>미리 보기</Button>}
+      {st==='denied'&&<span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>주소창 왼쪽 자물쇠 → 알림 → 허용으로 바꾼 뒤 새로고침하세요</span>}
+    </div>
+    <Line k="notifMail" def label="📬 새 메일" sub="자동 동기화가 새 메일을 가져오면 보낸사람과 제목을 알려 줍니다. 차단 목록에 걸린 메일은 알리지 않습니다."/>
+    <Line k="notifEvent" def label="⏰ 일정 임박" sub="시작 시각이 다가오면 한 번 알려 줍니다. 종일 일정은 아침에 한 번."/>
+    <div style={{display:'flex',alignItems:'center',gap:8,margin:'-2px 0 12px 10px',fontSize:'var(--fs-base)'}}>
+      몇 분 전에
+      <Select value={String(c.notifEventMin||10)} onChange={v=>setC({...c,notifEventMin:+v})}
+        options={[{id:'5',label:'5분 전'},{id:'10',label:'10분 전 (기본)'},{id:'15',label:'15분 전'},{id:'30',label:'30분 전'},{id:'60',label:'1시간 전'}]}/>
+    </div>
+    <Line k="notifDaily" label="☀ 오늘의 일정 요약" sub="아침에 한 번, 오늘 일정과 안 읽은 메일 수를 묶어 알려 줍니다."/>
+    <div style={{display:'flex',alignItems:'center',gap:8,margin:'-2px 0 12px 10px',fontSize:'var(--fs-base)'}}>
+      알릴 시각
+      <input type="time" value={c.notifDailyAt||'08:00'} onChange={e=>setC({...c,notifDailyAt:e.target.value})}
+        style={{...inputStyle,width:'auto',padding:'4px 8px'}}/>
+      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>이 시각 이후 앱을 처음 열 때 알려 줍니다</span>
+    </div>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:10,lineHeight:1.7}}>
+      같은 일정·같은 메일로 두 번 알리지 않습니다. 알림 기록은 날짜가 바뀌면 저절로 비워집니다.<br/>
+      알림이 오려면 <b>⚙ 메일 연동 › 자동 동기화 주기</b>가 켜져 있어야 합니다 — 메일을 가져와야 알릴 것이 생깁니다.
+    </div>
+  </>;
+}
 function ClaudeTab({c,setC}){
   const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const [t,setT]=React.useState(null);const [busy,setBusy]=React.useState(false);
@@ -37011,7 +37087,7 @@ function ClaudeTab({c,setC}){
     </div>
   </>;
 }
-Object.assign(window,{TrashModal,Login,SettingsModal,MailFolderSection});
+Object.assign(window,{TrashModal,Login,SettingsModal,MailFolderSection,NotiTab});
 </script>
 <script type="text/babel">/* 메일 관리: 계정/폴더 내비 · 목록 | 읽기 · 작성 · 가져오기 · 계정 연결 */
 const FOLDERS=[{id:'inbox',num:'①',label:'받은편지함'},{id:'starred',num:'②',label:'별표'},{id:'sent',num:'③',label:'보낸편지함'},{id:'draft',num:'④',label:'임시보관'},{id:'archive',num:'⑤',label:'보관'}];
@@ -37408,7 +37484,7 @@ function AttachBar({mail,toast}){
     </button>)}
   </div>;
 }
-function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,openSettings}){
+function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,openSettings,cloudPull}){
   const {Card,Button,Badge,InfoBar,Modal,DropZone}=window.HDWorkbookDesignSystem_ad60e4;
   const mobile=useMobile();
   const [lw,setLw,resetLw]=usePaneSize('mailList',360);   /* 목록 열 폭 — 손잡이를 끌어 조절 */
@@ -37470,12 +37546,14 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     let added=0;
     if(items.length){await stashAttachments(items);added=importMails(items,folderAcc(),true);}
     MailFolder.markDone(names);
-    return {read:files.length,added,blocked:blocked.length};
+    return {read:files.length,added,blocked:blocked.length,fresh:items.slice(0,5)};
   };
   /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다 */
   const quietSync=async(visible)=>{
     /* 회사 메일 폴더 먼저 — 내 PC 안의 일이라 탭이 안 보여도 돈다. 권한 창은 띄우지 않는다 */
-    try{const r=await pf.current(false);if(r&&r.added)toast('📁 회사 메일 '+r.added+'건 가져옴');}catch(_){}
+    try{const r=await pf.current(false);
+      if(r&&r.added){toast('📁 회사 메일 '+r.added+'건 가져옴');
+        window.dispatchEvent(new CustomEvent('pms:new-mail',{detail:{mails:(r.fresh||[]).slice(0,5)}}));}}catch(_){}
     if(!visible)return;                    /* Gmail 은 통신이라 탭이 보일 때만 */
     const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');
     if(!targets.length||!Gmail.connected)return;
@@ -37485,7 +37563,8 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       catch(e){console.warn('[PMS 자동 동기화]',explainGmailError(e));return;}
     }
     if(added.length){setDb('mails',[...added,...db.mails.filter(m=>!added.some(x=>x.id===m.id))]);
-      toast('📬 새 메일 '+added.length+'건');}
+      toast('📬 새 메일 '+added.length+'건');
+      window.dispatchEvent(new CustomEvent('pms:new-mail',{detail:{mails:added.slice(0,5)}}));}
   };
   /* 폴더에서 남김없이 가져오기. all=true 면 "이미 읽음" 기록을 지우고 처음부터 다시 읽는다 */
   const [blkN,setBlkN]=React.useState(()=>Blocked.list().length);
@@ -37515,11 +37594,17 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const syncEverything=async()=>{
     setBusy('sync');
     try{
+      /* ① 다른 기기가 이미 클라우드에 올려 둔 것부터 받아 온다 */
+      if(cloudPull){const n=await cloudPull();if(n)toast('☁ 다른 기기에서 '+n+'건 받아옴');}
       const folderOk=await MailFolder.state().catch(()=>'none');
       if(folderOk==='ok'||folderOk==='need')await pullAll(false);
       await syncAll(true);
       const gm=db.accounts.some(a=>a.provider==='gmail'&&a.status==='connected');
-      if(folderOk==='none'&&!gm){toast('가져올 곳이 없습니다 — ⚙ 설정 › 메일 연동에서 폴더나 Gmail 을 먼저 이어 주세요');return;}
+      if(folderOk==='none'&&!gm){
+        toast(Store.mode==='supabase'
+          ? '☁ 클라우드에서 최신 상태를 받아왔습니다 · 이 기기에는 회사 메일 폴더가 없습니다'
+          : '가져올 곳이 없습니다 — ⚙ 설정 › 메일 연동에서 폴더나 Gmail 을 먼저 이어 주세요');
+        return;}
       /* 마무리로 중복까지 정리 — 목록 한 번 훑는 정도라 부담이 없다 */
       const merged=dedupeMails();
       if(merged)toast('🧹 두 벌로 들어와 있던 메일 '+merged+'건을 합쳤습니다');
@@ -39653,7 +39738,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v6.5';
+const APP_VERSION='v6.7';
 /* ── 새 버전 확인 ─────────────────────────────────────
    홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
    그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
@@ -39688,6 +39773,74 @@ const hardReload=()=>{
   try{const u=new URL(location.href);u.searchParams.set('v',Date.now().toString(36));location.replace(u.toString());}
   catch(_){location.reload();}
 };
+/* ── 알림 ─────────────────────────────────────────────
+   ① 새 메일이 들어오면 ② 일정 시작이 다가오면 ③ 아침에 오늘 일정 요약.
+   같은 알림을 두 번 띄우지 않도록 "이미 알린 것"을 브라우저에 적어 둔다(날짜가 바뀌면 비운다) */
+const NOTI_KEY='pms.notified';
+const notiSeen=()=>{try{const v=JSON.parse(localStorage.getItem(NOTI_KEY)||'{}');
+  return v.day===todayISO()?v:{day:todayISO(),ids:[]};}catch(_){return {day:todayISO(),ids:[]};}};
+const notiMark=id=>{const v=notiSeen();if(v.ids.includes(id))return false;
+  v.ids=[...v.ids.slice(-300),id];try{localStorage.setItem(NOTI_KEY,JSON.stringify(v));}catch(_){}return true;};
+const notiHas=id=>notiSeen().ids.includes(id);
+
+function useNotifications(db,goto){
+  const R=React.useRef({});R.current={db,goto};
+  /* 새 메일 — 메일 화면이 가져온 뒤 알려 준다 */
+  React.useEffect(()=>{
+    const on=e=>{
+      if(!Notify.ok()||Store.cfg.notifMail===false)return;
+      const ms=(e.detail&&e.detail.mails)||[];if(!ms.length)return;
+      const head=ms[0];
+      const who=String(head.from||'').replace(/<.*>/,'').trim()||head.from||'';
+      Notify.show(ms.length>1?('📬 새 메일 '+ms.length+'통'):'📬 새 메일',
+        ms.length>1?(who+' · '+(head.subject||'')+' 외 '+(ms.length-1)+'건'):(who+'\n'+(head.subject||'')),'pms-mail');
+    };
+    window.addEventListener('pms:new-mail',on);
+    return()=>window.removeEventListener('pms:new-mail',on);
+  },[]);
+  /* 일정 임박 · 오늘 요약 — 30초마다 살펴본다 */
+  React.useEffect(()=>{
+    const tick=()=>{
+      if(!Notify.ok())return;
+      const d=R.current.db;if(!d||!d.events)return;
+      const today=todayISO(),now=new Date();
+      const hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+      /* ① 임박 */
+      if(Store.cfg.notifEvent!==false){
+        const lead=+(Store.cfg.notifEventMin||10);
+        expandEvents(d.events,today,today).forEach(e=>{
+          if(e.status==='done')return;
+          const key='ev:'+e.id+':'+e.date+':'+(e.start||'allday');
+          if(notiHas(key))return;
+          if(e.start){
+            const [h,m]=e.start.split(':').map(Number);
+            const at=new Date(now);at.setHours(h,m,0,0);
+            const left=(at-now)/60000;
+            if(left<=lead&&left>=-1){if(notiMark(key))Notify.show('⏰ '+e.title,
+              (left<1?'지금 시작':Math.round(left)+'분 뒤 시작')+' · '+e.start+(e.category?' · '+e.category:''),key);}
+          }else if(hhmm>=(Store.cfg.notifDailyAt||'08:00')){
+            if(notiMark(key))Notify.show('📌 오늘 '+e.title,'종일 일정'+(e.category?' · '+e.category:''),key);
+          }
+        });
+      }
+      /* ② 아침 요약 */
+      if(Store.cfg.notifDaily&&hhmm>=(Store.cfg.notifDailyAt||'08:00')){
+        const key='daily:'+today;
+        if(!notiHas(key)){
+          const list=expandEvents(d.events,today,today).filter(e=>e.status!=='done');
+          const unread=(d.mails||[]).filter(m=>m.folder==='inbox'&&!m.read).length;
+          if(notiMark(key))Notify.show('☀ 오늘의 일정 '+list.length+'건',
+            (list.length?list.slice(0,4).map(e=>(e.start?e.start+' ':'')+e.title).join('\n'):'등록된 일정 없음')
+            +(unread?'\n\n📬 안 읽은 메일 '+unread+'통':''),key);
+        }
+      }
+    };
+    const t=setInterval(tick,30000);const first=setTimeout(tick,4000);
+    const vis=()=>{if(!document.hidden)tick();};
+    document.addEventListener('visibilitychange',vis);
+    return()=>{clearInterval(t);clearTimeout(first);document.removeEventListener('visibilitychange',vis);};
+  },[]);
+}
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
 const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
@@ -39743,6 +39896,8 @@ function Shell({user,onLogout}){
   const [trashOpen,setTrash]=React.useState(false);const [saved,setSaved]=React.useState('');const [toastMsg,setToastMsg]=React.useState('');const [cfgOpen,setCfg]=React.useState(false);const [err,setErr]=React.useState('');
   const [mailSt,setMailSt]=React.useState({acc:'all',folder:'inbox',sel:null,picked:[]});const [calSt,setCalSt]=React.useState({view:'month',sub:'month',cals:{work:true,personal:true},anchor:todayISO()});const [kbSt,setKbSt]=React.useState({view:'notes',tag:'',scopes:{work:true,personal:true},picked:[],sel:null,mode:'split'});
   const timers=React.useRef({});const mobile=useMobile();const updated=useAppUpdate();
+  const [dbForNoti,setDbForNoti]=React.useState(null);
+  useNotifications(dbForNoti);
   React.useEffect(()=>{Store.loadAll().then(d=>{setDbRaw(d);
     if(Store.migrated)setTimeout(()=>toast('로컬 데이터를 클라우드로 이관했습니다'),400);
     else if(Store.rowMigrated)setTimeout(()=>toast('행 단위 저장으로 전환 · '+Store.rowMigrated+'건 이관'),400);}).catch(e=>setErr('데이터 로드 실패: '+e.message+' — 테이블 SQL을 실행했는지 확인하세요'));},[]);
@@ -39774,7 +39929,55 @@ function Shell({user,onLogout}){
     }
     applyDb(kind,arr);
   };
-  React.useEffect(()=>{if(db)dbRef.current=db;},[db]);
+  React.useEffect(()=>{if(db){dbRef.current=db;setDbForNoti(db);}},[db]);
+  /* ── 다른 기기가 올린 것 받아 오기 ───────────────────────
+     「동기화」는 메일 서비스에서 새로 가져오는 동작이라, 다른 기기가 이미 클라우드에 올려 둔 것은
+     따로 내려받아야 한다. 바뀐 행만 골라 오므로 자주 불러도 부담이 없다 */
+  const pullRef=React.useRef({at:'',busy:false});
+  const cloudPull=React.useCallback(async()=>{
+    if(Store.mode!=='supabase')return 0;
+    const P=pullRef.current;if(P.busy)return 0;
+    P.busy=true;
+    try{
+      const rows=await Store.pull(P.at);
+      if(rows===null){                                   /* 행 단위 저장이 아니면 통째로 */
+        const d=await Store.loadAll();dbRef.current=d;setDbRaw(d);P.at=new Date().toISOString();return 0;
+      }
+      let n=0;const byKind={};
+      rows.forEach(r=>{(byKind[r.kind]=byKind[r.kind]||[]).push(r);if(!P.at||r.updated_at>P.at)P.at=r.updated_at;});
+      Object.entries(byKind).forEach(([kind,list])=>{
+        const base=(dbRef.current&&dbRef.current[kind])||[];
+        const m=new Map(base.map(x=>[x.id,x]));let hit=0;
+        list.forEach(r=>{
+          if(r.deleted_at){if(m.delete(r.item_id))hit++;return;}
+          const cur=m.get(r.item_id);
+          if(cur&&JSON.stringify(cur)===JSON.stringify(r.data))return;   /* 내가 방금 올린 것 — 셈에서 뺀다 */
+          m.set(r.item_id,r.data);hit++;
+        });
+        if(!hit)return;
+        n+=hit;const arr=[...m.values()];
+        dbRef.current={...(dbRef.current||{}),[kind]:arr};
+        setDbRaw(d=>({...d,[kind]:arr}));
+      });
+      return n;
+    }catch(_){return 0;}
+    finally{P.busy=false;}
+  },[]);
+  /* 화면을 다시 보게 될 때 + 3분마다 조용히 받아 온다 */
+  const cp=React.useRef(cloudPull);cp.current=cloudPull;
+  React.useEffect(()=>{
+    let last=0;
+    const go=async(quiet)=>{
+      if(Date.now()-last<20000)return;last=Date.now();
+      const n=await cp.current();
+      if(n&&!quiet)toast('☁ 다른 기기에서 바뀐 '+n+'건을 받아왔습니다');
+    };
+    const vis=()=>{if(!document.hidden)go();};
+    document.addEventListener('visibilitychange',vis);
+    const t=setInterval(()=>go(),180000);
+    const first=setTimeout(()=>{pullRef.current.at=new Date().toISOString();},1500);
+    return()=>{document.removeEventListener('visibilitychange',vis);clearInterval(t);clearTimeout(first);};
+  },[]);
   const step=(e,dir)=>{const n=Math.abs(e.after.length-e.before.length);
     const what=KIND_LABEL[e.kind]||e.kind;
     return what+(n?' '+n+'건 '+(e.after.length>e.before.length?'추가':'삭제'):' 수정')+' '+dir;};
@@ -39861,7 +40064,7 @@ function Shell({user,onLogout}){
     <div style={{display:'flex',flexDirection:mobile?'column':'row',alignItems:'stretch',flex:1,minHeight:'calc(100vh - 90px)'}}>
       {mobile?<MobileNav sections={nav}/>:<NavSidebar sections={nav}/>}
       <main style={{flex:1,minWidth:0,padding:mobile?'10px 10px calc(64px + env(safe-area-inset-bottom))':'var(--pad-content)'}}>
-        {zone==='mail'&&<MailView db={db} setDb={setDb} st={mailSt} set={merge(setMailSt)} toast={toast} sendToNote={sendToNote} sendManyToNote={sendManyToNote} sendToEvent={sendToEvent} openSettings={()=>setCfg(true)}/>}
+        {zone==='mail'&&<MailView db={db} setDb={setDb} st={mailSt} set={merge(setMailSt)} toast={toast} cloudPull={cloudPull} sendToNote={sendToNote} sendManyToNote={sendManyToNote} sendToEvent={sendToEvent} openSettings={()=>setCfg(true)}/>}
         {zone==='cal'&&<CalendarView db={db} setDb={setDb} st={calSt} set={merge(setCalSt)} toast={toast} sendToNote={sendToNote}/>}
         {zone==='kb'&&<KnowledgeView db={db} setDb={setDb} st={kbSt} set={merge(setKbSt)} toast={toast}/>}
       </main>
