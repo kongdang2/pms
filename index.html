@@ -35898,6 +35898,18 @@ const Store={
     }catch(e){out.err=e.message;}
     return out;
   },
+  /* ── 삭제 기록 ──────────────────────────────────────
+     저장할 때 "이전에 있었는데 지금 없는 것"은 지워진 것으로 보고 서버에서도 지운다.
+     의도치 않은 삭제를 추적할 수 있도록, 무엇이 왜 지워졌는지 남긴다 */
+  why:'',
+  logDelete(kind,items){
+    try{
+      const a=JSON.parse(localStorage.getItem('pms.dellog')||'[]');
+      a.push({t:new Date().toISOString(),kind,by:this.why||'(알 수 없음)',n:items.length,
+        titles:items.slice(0,5).map(x=>(x&&(x.subject||x.title))||'(제목 없음)')});
+      localStorage.setItem('pms.dellog',JSON.stringify(a.slice(-60)));
+    }catch(_){}
+  },
   async persist(kind,arr){
     const prev=this.snap[kind]||new Map();
     const next=new Map((arr||[]).map(x=>[x.id,JSON.stringify(x)]));
@@ -35905,7 +35917,8 @@ const Store={
     if(this.mode==='supabase'&&this.rowMode){
       const up=[];next.forEach((j,id)=>{if(prev.get(id)!==j)up.push({user_id:this.user.id,kind,item_id:id,data:JSON.parse(j),updated_at:nowStamp(),deleted_at:null});});
       if(up.length){const {error}=await this.sb.from('pms_items').upsert(up);if(error)throw new Error(explainSbError(error));}
-      if(gone.length){const {error}=await this.sb.from('pms_items').update({deleted_at:nowStamp()}).eq('user_id',this.user.id).eq('kind',kind).in('item_id',gone);if(error)throw new Error(explainSbError(error));}
+      if(gone.length){this.logDelete(kind,gone.map(id=>{try{return JSON.parse(prev.get(id));}catch(_){return null;}}));
+        const {error}=await this.sb.from('pms_items').update({deleted_at:nowStamp()}).eq('user_id',this.user.id).eq('kind',kind).in('item_id',gone);if(error)throw new Error(explainSbError(error));}
     }
     else if(this.mode==='supabase'){
       /* 묶음 저장(옛 방식)은 통째로 덮어쓰므로, 그냥 올리면 다른 기기가 올려 둔 것이 날아간다.
@@ -35932,7 +35945,7 @@ const Store={
     this.snap[kind]=next;
   },
   /* ── 휴지통 ── */
-  localTrash(kind,items){try{const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');
+  localTrash(kind,items){this.logDelete(kind,items);try{const t=JSON.parse(localStorage.getItem(this.trashKey())||'[]');
     items.forEach(it=>t.push({kind,item:it,at:nowStamp()}));
     const cut=Date.now()-TRASH_DAYS*864e5;
     localStorage.setItem(this.trashKey(),JSON.stringify(t.filter(x=>new Date(x.at).getTime()>cut).slice(-500)));}catch(_){}},
@@ -36959,6 +36972,11 @@ function MailFolderSection({onToast}){
       폴더 안의 <b style={{fontFamily:'var(--font-num)'}}>{cnt.all}</b>개 <code>.eml</code> 중 <b style={{fontFamily:'var(--font-num)'}}>{cnt.neu}</b>개가 아직 안 읽은 파일입니다.
       {cnt.all===0&&<span style={{color:'var(--color-danger)'}}> — 파일이 하나도 없습니다. 회사 PC의 작업 스케줄러가 도는지 확인하세요.</span>}
     </div>}
+    <InfoBar tone={st==='granted'?undefined:'warn'}>
+      <b>폴더 권한을 「매번 방문할 때 허용」으로 주셔야 합니다.</b> 「이번만 허용」으로 주면 브라우저가 <b>탭이 한동안 배경에 있을 때 권한을 자동으로 거둬들여</b>,
+      자동 동기화가 조용히 멈춥니다. 권한 창이 뜨면 <b>매번 방문할 때 허용</b>(Allow on every visit)을 고르세요.
+      이미 「이번만」으로 주셨다면, 주소창 왼쪽 자물쇠 → 이 사이트의 파일 권한을 지운 뒤 아래 <b>폴더 고르기</b>로 다시 지정하시면 창이 다시 뜹니다.
+    </InfoBar>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:6,lineHeight:1.55}}>
       스크립트가 저장하는 폴더(예: <code>문서\PMS_Mail</code>)를 고르세요. 자동 동기화 주기마다 새 <code>.eml</code>만 읽어 갑니다.
       브라우저를 새로 열면 권한을 한 번 더 확인할 수 있습니다 — 그때는 이 화면에서 「권한 다시 주기」를 누르세요.
@@ -37036,6 +37054,7 @@ function SettingsModal({open,onClose,onToast}){
       <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',margin:'4px 0'}}>테이블 생성 SQL (SQL Editor에서 1회 실행)</div>
       <pre style={{font:'11px/1.45 var(--font-mono)',background:'var(--surface-hover)',border:'1px solid var(--border-default)',padding:'8px 10px',borderRadius:4,maxHeight:150,overflow:'auto',margin:0,whiteSpace:'pre-wrap'}}>{SUPABASE_SQL}</pre>
       <div style={{marginTop:6}}><Button variant="ghost" size="sm" onClick={()=>{navigator.clipboard.writeText(SUPABASE_SQL);onToast&&onToast('SQL 복사됨');}}>📋 SQL 복사</Button></div>
+      <DeleteLog/>
       <CloudDiag onToast={onToast}/>
       <RowModeSection onToast={onToast}/>
       <FilesSection onToast={onToast}/>
@@ -37081,6 +37100,7 @@ function SettingsModal({open,onClose,onToast}){
           options={[{id:'0',label:'끄기 — 🔄 단추를 눌렀을 때만'},{id:'1',label:'1분마다'},{id:'5',label:'5분마다 (권장)'},{id:'15',label:'15분마다'},{id:'30',label:'30분마다'},{id:'60',label:'1시간마다'}]}/>
       </Field>
       <KeepAwakeRow onToast={onToast}/>
+      <SyncLogRow/>
       <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',margin:'-4px 0 8px'}}>
         Gmail이 <b>연결된 상태</b>에서, 이 앱 탭이 열려 있는 동안만 돕니다. 새 메일이 있을 때만 알림이 뜹니다. Gmail API 무료 한도는 넉넉하지만 배터리를 아끼려면 5분 이상을 권합니다.
       </div>
@@ -37091,6 +37111,34 @@ function SettingsModal({open,onClose,onToast}){
   </Modal>;
 }
 
+/* 무엇이 언제 왜 지워졌는지 — 의도치 않은 삭제를 추적한다 */
+function DeleteLog(){
+  const {Button}=window.HDWorkbookDesignSystem_ad60e4;
+  const [open,setOpen]=React.useState(false);const [rows,setRows]=React.useState([]);
+  const load=()=>{try{setRows(JSON.parse(localStorage.getItem('pms.dellog')||'[]').slice().reverse());}catch(_){setRows([]);}};
+  React.useEffect(()=>{if(open)load();},[open]);
+  const K={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
+  return <div style={{marginTop:12,paddingTop:12,borderTop:'1px solid var(--border-default)'}}>
+    <div style={{display:'flex',alignItems:'center',gap:8}}>
+      <Button variant="ghost" size="sm" onClick={()=>setOpen(o=>!o)}>{open?'▾':'▸'} 삭제 기록</Button>
+      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>무엇이 언제 왜 지워졌는지</span>
+      {open&&<span style={{marginLeft:'auto',display:'flex',gap:4}}>
+        <Button variant="ghost" size="xs" onClick={load}>새로 고침</Button>
+        <Button variant="ghost" size="xs" onClick={()=>{try{localStorage.removeItem('pms.dellog');}catch(_){}load();}}>지우기</Button></span>}
+    </div>
+    {open&&<div style={{marginTop:6,border:'1px solid var(--border-default)',borderRadius:4,maxHeight:240,overflowY:'auto',background:'var(--surface-hover)'}}>
+      {!rows.length&&<div style={{padding:16,textAlign:'center',color:'var(--text-label)',fontSize:'var(--fs-base)'}}>지워진 것이 없습니다</div>}
+      {rows.map((r,i)=><div key={i} style={{padding:'6px 10px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)'}}>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <span style={{fontFamily:'var(--font-num)'}}>{String(r.t).slice(5,19).replace('T',' ')}</span>
+          <b>{K[r.kind]||r.kind} {r.n}건</b>
+          <span style={{marginLeft:'auto',color:'var(--color-danger)',fontWeight:600}}>{r.by}</span>
+        </div>
+        <div style={{color:'var(--text-muted)',marginTop:2,overflow:'hidden',textOverflow:'ellipsis'}}>{(r.titles||[]).join(' / ')}</div>
+      </div>)}
+    </div>}
+  </div>;
+}
 /* 클라우드에 실제로 무엇이 들어 있는지 보여 준다 — 기기마다 건수가 다를 때 원인을 가른다 */
 function CloudDiag({onToast}){
   const {Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
@@ -37127,6 +37175,42 @@ function CloudDiag({onToast}){
             · {m.subject||'(제목 없음)'} <span style={{color:'var(--text-muted)'}}>{String(m.saved||'').slice(0,19).replace('T',' ')}</span></div>)}
         </div>}
       </>}
+    </div>}
+  </div>;
+}
+/* 자동 동기화가 실제로 언제 돌았는지 — 배경에서 멈추는 원인을 눈으로 확인한다 */
+function SyncLogRow(){
+  const {Button,Badge}=window.HDWorkbookDesignSystem_ad60e4;
+  const [open,setOpen]=React.useState(false);const [rows,setRows]=React.useState([]);
+  const load=()=>setRows(SyncLog.list().slice().reverse());
+  React.useEffect(()=>{if(open)load();},[open]);
+  const ago=t=>{const s=Math.floor((Date.now()-new Date(t).getTime())/1000);
+    return s<60?s+'초 전':s<3600?Math.floor(s/60)+'분 전':Math.floor(s/3600)+'시간 전';};
+  const FOLDER={ok:'정상',need:'권한 풀림',none:'폴더 없음',unsupported:'미지원'};
+  return <div style={{margin:'8px 0 10px'}}>
+    <div style={{display:'flex',alignItems:'center',gap:8}}>
+      <Button variant="ghost" size="sm" onClick={()=>setOpen(o=>!o)}>{open?'▾':'▸'} 자동 동기화 기록</Button>
+      <span style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)'}}>배경에서 도는지 확인할 때</span>
+      {open&&<span style={{marginLeft:'auto',display:'flex',gap:4}}>
+        <Button variant="ghost" size="xs" onClick={load}>새로 고침</Button>
+        <Button variant="ghost" size="xs" onClick={()=>{SyncLog.clear();load();}}>지우기</Button></span>}
+    </div>
+    {open&&<div style={{marginTop:6,border:'1px solid var(--border-default)',borderRadius:4,maxHeight:220,overflowY:'auto',background:'var(--surface-hover)'}}>
+      {!rows.length&&<div style={{padding:16,textAlign:'center',color:'var(--text-label)',fontSize:'var(--fs-base)'}}>아직 기록이 없습니다 — 자동 동기화가 한 번도 돌지 않았습니다</div>}
+      {rows.map((r,i)=><div key={i} style={{display:'grid',gridTemplateColumns:'88px 52px 78px 1fr',gap:6,alignItems:'center',
+        padding:'5px 9px',borderBottom:'1px solid var(--border-default)',fontSize:'var(--fs-sm)'}}>
+        <span style={{fontFamily:'var(--font-num)'}}>{String(r.t).slice(11,19)}</span>
+        <Badge tone={r.vis==='보임'?'pill':'muted'}>{r.vis}</Badge>
+        <span style={{color:r.folder==='ok'?'var(--color-success)':'var(--color-danger)'}}>{FOLDER[r.folder]||r.folder||'–'}</span>
+        <span style={{color:'var(--text-muted)'}}>
+          {r.err?<b style={{color:'var(--color-danger)'}}>{r.err}</b>
+            :<>파일 {r.read||0}개 · 새 메일 {r.added||0}건 <span style={{marginLeft:6}}>{ago(r.t)}</span></>}
+        </span>
+      </div>)}
+    </div>}
+    {open&&<div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:5,lineHeight:1.6}}>
+      <b>숨김</b> 줄이 주기마다 꾸준히 쌓이면 배경에서도 잘 도는 것입니다.
+      줄 자체가 안 생기면 브라우저가 탭을 멈춘 것이고, <b>권한 풀림</b> 이면 폴더 접근이 끊긴 것입니다.
     </div>}
   </div>;
 }
@@ -37508,6 +37592,19 @@ function mailKeys(m){
   return ks;
 }
 const mailKey=m=>mailKeys(m)[mailKeys(m).length-1];
+/* 제목·시각·보낸사람이 같아도 "같은 메일"이라고 단정하면 안 된다 —
+   같은 사람이 같은 분에 비슷한 제목으로 두 통을 보내는 일이 실제로 있다.
+   원래 합치려던 것은 "한쪽은 본문이 있고 한쪽은 없는 한 쌍" 이었으므로,
+   양쪽 다 본문이 있는데 내용이 다르면 서로 다른 메일로 본다 */
+const bodyKey=m=>String((m&&m.body)||'').replace(/\s+/g,' ').trim().slice(0,400);
+const hKey=m=>mailKeys(m).filter(k=>k[0]==='h')[0]||'';
+function sameMail(a,b){
+  const ea=String((a&&a.eid)||''),eb=String((b&&b.eid)||'');
+  if(ea.length>=60&&eb.length>=60)return ea===eb;      /* 고유번호가 있으면 그것만 믿는다 */
+  if(hKey(a)!==hKey(b))return false;
+  const ba=hasBody(a)?bodyKey(a):'',bb=hasBody(b)?bodyKey(b):'';
+  return !ba||!bb||ba===bb;
+}
 /* ── 보낸사람 차단 목록 ─────────────────────────────────
    설정에 적어 둔 주소·도메인·이름 조각과 겹치면 가져오지 않는다.
    "@sale.co.kr" 처럼 @로 시작하면 도메인 전체, 그 외에는 주소나 표시 이름에 그 글자가 들어가면 걸린다 */
@@ -37538,6 +37635,14 @@ function addBlockRule(rule){
   return !has;
 }
 const domainOf=f=>{const a=addrOf(f);const i=a.lastIndexOf('@');return i<0?'':a.slice(i);};
+/* 자동 동기화가 언제 어떻게 돌았는지 남기는 작은 기록장 (이 브라우저에만, 최근 40번) */
+const SYNCLOG_KEY='pms.synclog';
+const SyncLog={
+  list(){try{return JSON.parse(localStorage.getItem(SYNCLOG_KEY)||'[]');}catch(_){return [];}},
+  add(o){try{const a=this.list();a.push({t:new Date().toISOString(),...o});
+    localStorage.setItem(SYNCLOG_KEY,JSON.stringify(a.slice(-40)));}catch(_){}},
+  clear(){try{localStorage.removeItem(SYNCLOG_KEY);}catch(_){}},
+};
 const hasBody=m=>!!(m&&m.body)&&!/^\(본문 없음/.test(m.body);
 const attUsable=a=>(a||[]).some(x=>x&&(x.path||x.aid));
 /* 두 벌을 한 통으로 — 본문 있는 쪽을 뼈대로, 빠진 값은 다른 쪽에서 채운다 */
@@ -37631,22 +37736,22 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   const picked=st.picked||[];
   const togglePick=id=>set({picked:picked.includes(id)?picked.filter(x=>x!==id):[...picked,id]});
   const bulk=(patch,msg)=>{setDb('mails',arr=>arr.map(m=>picked.includes(m.id)?{...m,...patch}:m));set({picked:[],sel:null});toast(picked.length+'건 '+msg);};
-  const bulkDelete=()=>{setDb('mails',arr=>arr.filter(m=>!picked.includes(m.id)));set({picked:[],sel:null});toast(picked.length+'건 삭제됨');};
+  const bulkDelete=()=>{Store.why='메일 삭제(여러 건 선택)';setDb('mails',arr=>arr.filter(m=>!picked.includes(m.id)));set({picked:[],sel:null});toast(picked.length+'건 삭제됨');};
   const bulkNote=()=>{const ms=db.mails.filter(m=>picked.includes(m.id));if(!ms.length)return;sendManyToNote(ms);set({picked:[]});};
   const compose=(mode)=>{const a=cur&&accOf(cur.acc);const base={acc:cur?cur.acc:(st.acc==='all'?'work':st.acc),to:'',cc:'',subject:'',body:''};
     if(mode==='reply')Object.assign(base,{to:cur.from,subject:'RE: '+cur.subject.replace(/^RE:\s*/i,''),body:'\n\n---- 원본 메일 ----\n'+cur.body});
     if(mode==='fwd')Object.assign(base,{subject:'FW: '+cur.subject,body:'\n\n---- 전달된 메일 ----\n보낸 사람: '+cur.from+'\n제목: '+cur.subject+'\n\n'+cur.body});
     set({compose:base});};
   const send=(draft,asDraft)=>{const a=accOf(draft.acc);const m={id:uid(),acc:draft.acc,folder:asDraft?'draft':'sent',from:a.email,to:draft.to,cc:draft.cc,subject:draft.subject||'(제목 없음)',date:nowStamp(),body:draft.body,star:false,read:true,tags:[]};
-    setDb('mails',[m,...db.mails]);set({compose:null});
+    setDb('mails',arr=>[m,...arr]);set({compose:null});
     if(asDraft){toast('임시보관함에 저장');return;}
     if(a.provider==='gmail'&&a.status==='connected'){toast('📤 Gmail로 보내는 중…');Gmail.send({from:a.email,to:draft.to,cc:draft.cc,subject:draft.subject,body:draft.body}).then(()=>toast('Gmail 발송 완료 · '+draft.to)).catch(e=>{toast('⚠ 발송 실패: '+explainGmailError(e));upd(m.id,{folder:'draft'});});return;}
     location.href='mailto:'+encodeURIComponent(draft.to)+'?'+(draft.cc?'cc='+encodeURIComponent(draft.cc)+'&':'')+'subject='+encodeURIComponent(draft.subject)+'&body='+encodeURIComponent(draft.body);toast('기본 메일 앱으로 발송 · 보낸편지함에 기록');};
   const [busy,setBusy]=React.useState('');
   const connectGmail=async a=>{setBusy('connect');try{await Gmail.connect({prompt:'consent'});const pr=await Gmail.profile();
-      setDb('accounts',db.accounts.map(x=>x.id===a.id?{...x,email:pr.emailAddress||x.email,status:'connected',note:'Gmail API 연결됨 · 동기화 버튼으로 가져오기'}:x));toast('Google 연결됨 · '+pr.emailAddress);}
+      setDb('accounts',arr=>arr.map(x=>x.id===a.id?{...x,email:pr.emailAddress||x.email,status:'connected',note:'Gmail API 연결됨 · 동기화 버튼으로 가져오기'}:x));toast('Google 연결됨 · '+pr.emailAddress);}
     catch(e){toast('⚠ '+explainGmailError(e));}setBusy('');};
-  const disconnectGmail=a=>{Gmail.disconnect();setDb('accounts',db.accounts.map(x=>x.id===a.id?{...x,status:'ready',note:'Gmail API OAuth — 연결 버튼으로 다시 연결'}:x));toast('연결 해제');};
+  const disconnectGmail=a=>{Gmail.disconnect();setDb('accounts',arr=>arr.map(x=>x.id===a.id?{...x,status:'ready',note:'Gmail API OAuth — 연결 버튼으로 다시 연결'}:x));toast('연결 해제');};
   const syncAll=async(quiet)=>{const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');
     if(!targets.length){if(!quiet){set({accOpen:true});toast('연결된 API 계정 없음 · Google 연결을 먼저 하세요');}return;}
     setBusy('sync');let total=0;
@@ -37677,12 +37782,19 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     MailFolder.markDone(names);
     return {read:files.length,added,blocked:blocked.length,fresh:items.slice(0,5)};
   };
-  /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다 */
+  /* 자동 동기화 — 설정한 주기마다 조용히 돈다. 탭이 안 보이면 쉬고, 새 메일이 있을 때만 알린다.
+     무슨 일이 있었는지 기록을 남긴다(설정 › 메일 연동에서 볼 수 있다) — 배경에서 안 도는 원인을 가리기 위해 */
   const quietSync=async(visible)=>{
+    const rec={vis:visible?'보임':'숨김'};
     /* 회사 메일 폴더 먼저 — 내 PC 안의 일이라 탭이 안 보여도 돈다. 권한 창은 띄우지 않는다 */
-    try{const r=await pf.current(false);
+    try{
+      rec.folder=await MailFolder.state().catch(e=>'err:'+e.message);
+      const r=await pf.current(false);
+      rec.read=(r&&r.read)||0;rec.added=(r&&r.added)||0;
       if(r&&r.added){toast('📁 회사 메일 '+r.added+'건 가져옴');
-        window.dispatchEvent(new CustomEvent('pms:new-mail',{detail:{mails:(r.fresh||[]).slice(0,5)}}));}}catch(_){}
+        window.dispatchEvent(new CustomEvent('pms:new-mail',{detail:{mails:(r.fresh||[]).slice(0,5)}}));}
+    }catch(e){rec.err=String(e&&e.message||e);}
+    SyncLog.add(rec);
     if(!visible)return;                    /* Gmail 은 통신이라 탭이 보일 때만 */
     const targets=db.accounts.filter(a=>a.provider==='gmail'&&a.status==='connected');
     if(!targets.length||!Gmail.connected)return;
@@ -37698,6 +37810,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   /* 폴더에서 남김없이 가져오기. all=true 면 "이미 읽음" 기록을 지우고 처음부터 다시 읽는다 */
   const [blkN,setBlkN]=React.useState(()=>Blocked.list().length);
   const pullAll=async(all)=>{
+    Store.why=all?'전부 다시 읽기':'폴더 가져오기';
     if(all)MailFolder.reread();
     let read=0,added=0,blk=0;
     for(let i=0;i<200;i++){
@@ -37721,7 +37834,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   };
   /* 「동기화」 하나로: 회사 메일 폴더를 읽고, 이어서 Gmail 을 가져온다 */
   const syncEverything=async()=>{
-    setBusy('sync');
+    setBusy('sync');Store.why='동기화';
     try{
       /* ① 다른 기기가 이미 클라우드에 올려 둔 것부터 받아 온다 */
       if(cloudPull){const n=await cloudPull();toast(n?('☁ 다른 기기에서 '+n+'건 받아옴'):'☁ 클라우드는 이 화면과 같은 상태입니다');}
@@ -37737,7 +37850,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       /* 마무리로 중복까지 정리 — 목록 한 번 훑는 정도라 부담이 없다 */
       const merged=dedupeMails();
       if(merged)toast('🧹 두 벌로 들어와 있던 메일 '+merged+'건을 합쳤습니다');
-    }finally{setBusy('');checkFolder();}
+    }finally{setBusy('');Store.why='';checkFolder();}
   };
   const pf=React.useRef(pullFolder);pf.current=pullFolder;
   const qs=React.useRef(quietSync);qs.current=quietSync;
@@ -37784,7 +37897,8 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
       const pos=new Map(out.map((m,i)=>[m.id,i]));
       const fresh=[];
       items.forEach(p=>{
-        let ex=null;for(const k of mailKeys(p)){if(idx.has(k)){ex=idx.get(k);break;}}
+        let ex=null;
+        for(const k of mailKeys(p)){const c=idx.get(k);if(c&&sameMail(c,p)){ex=c;break;}}
         if(!ex){const m={id:uid(),acc,folder:'inbox',star:false,read:false,tags:[],...p};
           fresh.push(m);reg(m);addN++;return;}
         /* 이미 있는 메일 — 본문·첨부·주소가 빠져 있으면 채운다 */
@@ -37803,21 +37917,26 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
   /* 같은 메일이 두 벌 들어온 경우 합치기 — 본문·주소가 있는 쪽을 남긴다 */
   /* 지금 저장된 목록을 기준으로 계산한다 — 방금 끝난 가져오기 결과까지 반영되도록 */
   const dedupeMails=()=>{
-    let gone=0;
+    Store.why='중복 정리';let gone=0;const merged=[];
     setDb('mails',prev=>{
-      const seen=new Map();const out=[];
-      const reg=m=>mailKeys(m).forEach(k=>seen.set(k,m));
+      const buckets=new Map();const out=[];
       prev.forEach(m=>{
-        let ex=null;for(const k of mailKeys(m)){if(seen.has(k)){ex=seen.get(k);break;}}
-        if(!ex){reg(m);out.push(m);return;}
-        gone++;
-        const merged={...mergeMail(ex,m),id:ex.id};
-        const i=out.indexOf(ex);if(i>=0)out[i]=merged;
-        reg(merged);
+        const ks=mailKeys(m);let cand=null;
+        for(const k of ks){const list=buckets.get(k);if(!list)continue;
+          const hit=list.find(x=>sameMail(x,m));if(hit){cand=hit;break;}}
+        if(!cand){
+          out.push(m);ks.forEach(k=>{const l=buckets.get(k)||[];l.push(m);buckets.set(k,l);});
+          return;
+        }
+        gone++;if(merged.length<3)merged.push(m.subject||'(제목 없음)');
+        const mg={...mergeMail(cand,m),id:cand.id};
+        const i=out.indexOf(cand);if(i>=0)out[i]=mg;
+        ks.forEach(k=>{const l=buckets.get(k)||[];const j=l.indexOf(cand);if(j>=0)l[j]=mg;else l.push(mg);buckets.set(k,l);});
       });
       return gone?out:prev;
     });
-    if(gone)set({sel:null,picked:[]});
+    if(gone){set({sel:null,picked:[]});
+      SyncLog.add({vis:'-',folder:'-',read:0,added:0,err:'중복 '+gone+'건 합침: '+merged.join(' / ')+(gone>3?' 외':'')});}
     return gone;
   };
   const TB=({children,...p})=><Button variant="ghost" size="sm" {...p}>{children}</Button>;
@@ -37834,7 +37953,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
         ]}/>
         <Button variant="gray" size="sm" icon="🚫" title="필터·차단 규칙에 걸려 안 가져온 메일을 보고 되살립니다"
           onClick={()=>set({skipOpen:true})}>안 가져온 메일{blkN?' '+blkN:''}</Button>
-        {fstat==='need'&&<Button variant="danger" size="sm" icon="⚠" title="브라우저를 껐다 켜면 폴더 권한이 풀립니다 — 눌러서 다시 허용하세요" onClick={async()=>{await pullAll(false);checkFolder();}}>폴더 권한 필요</Button>}
+        {fstat==='need'&&<Button variant="danger" size="sm" icon="⚠" title="탭이 한동안 배경에 있으면 브라우저가 폴더 권한을 거둬 갑니다 — 눌러서 다시 허용하되, 창에서 「매번 방문할 때 허용」을 고르세요" onClick={async()=>{await pullAll(false);checkFolder();}}>폴더 권한 필요</Button>}
         {auto>0&&<Badge tone={fstat==='need'?'warn':'pill'} title={'설정 › 메일 연동에서 바꿉니다 · 마지막 확인 '+agoText(lastRun)}>⏱ 자동 {auto}분 · {agoText(lastRun)}</Badge>}
         {!auto&&<Badge tone="warn" style={{cursor:'pointer'}} title="설정 › 메일 연동 › 자동 동기화 주기에서 켭니다" onClick={openSettings}>⏱ 자동 꺼짐</Badge>}</>}
       toolbarRight={<>{mobile&&<AccPick db={db} value={st.acc} onChange={v=>set({acc:v,sel:null,picked:[]})}/>}{!mobile&&<Select value={sf} onChange={setSf} options={SFIELDS} style={{width:96}}/>}<TextInput value={q} onChange={e=>setQ(e.target.value)} placeholder={'🔍 '+(SFIELDS.find(f=>f.id===sf)||{}).label+' 검색'} style={{width:mobile?150:210,padding:'4px 8px'}}/>{q&&<Button variant="ghost" size="xs" onClick={()=>setQ('')}>✕</Button>}</>}>
@@ -37874,7 +37993,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
               <TB onClick={()=>compose('reply')}>↩ 답장</TB><TB onClick={()=>compose('fwd')}>↪ 전달</TB><TB onClick={()=>upd(cur.id,{star:!cur.star})}>{cur.star?'★ 별표 해제':'☆ 별표'}</TB>
               <TB onClick={()=>sendToNote(cur)}>📝 노트로</TB><TB onClick={()=>set({ingest:[{kind:'mail',item:cur}]})}>🤖 위키에 수집</TB><TB onClick={()=>sendToEvent(cur)}>📅 일정으로</TB>
               <TB onClick={()=>set({block:cur})} title="이 보낸사람에게서 오는 메일을 앞으로 가져오지 않습니다">⛔ 차단</TB>
-              <span style={{marginLeft:'auto',display:'flex',gap:6}}><TB onClick={()=>{upd(cur.id,{folder:'archive'});set({sel:null});toast('보관됨');}}>🗄 보관</TB><Button variant="danger" size="sm" onClick={()=>{setDb('mails',arr=>arr.filter(m=>m.id!==cur.id));set({sel:null});toast('삭제됨');}}>🗑 삭제</Button></span>
+              <span style={{marginLeft:'auto',display:'flex',gap:6}}><TB onClick={()=>{upd(cur.id,{folder:'archive'});set({sel:null});toast('보관됨');}}>🗄 보관</TB><Button variant="danger" size="sm" onClick={()=>{Store.why='메일 삭제(직접)';setDb('mails',arr=>arr.filter(m=>m.id!==cur.id));set({sel:null});toast('삭제됨');}}>🗑 삭제</Button></span>
             </div>
             <h3 style={{margin:'0 0 8px',font:'600 16.1px/1.35 var(--font-sans)'}}>{cur.subject}</h3>
             <div style={{display:'grid',gridTemplateColumns:'70px 1fr',rowGap:2,fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:14}}>
@@ -37910,7 +38029,7 @@ function MailView({db,setDb,st,set,toast,sendToNote,sendManyToNote,sendToEvent,o
     <SkippedModal open={!!st.skipOpen} db={db} toast={toast}
       onClose={()=>{set({skipOpen:false});setBlkN(Blocked.list().length);}}
       onRestoreBlocked={mails=>importMails(mails,folderAcc())}
-      onRestoreExcluded={mails=>setDb('mails',[...mails,...db.mails.filter(m=>!mails.some(x=>x.id===m.id))])}/>
+      onRestoreExcluded={mails=>setDb('mails',arr=>[...mails,...arr.filter(m=>!mails.some(x=>x.id===m.id))])}/>
     <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null,picked:[]})}/>
   </>;
 }
@@ -38103,7 +38222,7 @@ function ImportModal({open,accounts,onClose,onImport}){
     <textarea value={paste} onChange={e=>setPaste(e.target.value)} rows={7} placeholder={'보낸 사람: 김부장 <kim@company.co.kr>\n받는 사람: me@company.co.kr\n제목: 회의 자료\n날짜: 2026-09-07 10:00\n\n본문...'} style={{...inputStyle,resize:'vertical',font:'12.5px/1.6 var(--font-sans)'}}/>
   </Modal>;
 }
-Object.assign(window,{MailView,mailNav,AccPick,BlockAddModal,addBlockRule,domainOf,FOLDERS,SkippedModal,BlockedBody,ExcludedBody,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
+Object.assign(window,{MailView,mailNav,AccPick,SyncLog,BlockAddModal,addBlockRule,domainOf,FOLDERS,SkippedModal,BlockedBody,ExcludedBody,Blocked,blockedBy,sanitizeHtml,MailBody,TextBody,tidyBody,mailKey,mailKeys,mergeMail,fromKey,hasBody,AttachBar,attNorm,stashAttachments,parseEml,parseMsg});
 </script>
 <script type="text/babel">/* 일정 관리: 월간(주간 서브) · 목록 — 카테고리(색) · 기간 일정 · 공휴일 · 드래그 이동 */
 const CAL_VIEWS=[{id:'month',num:'①',label:'월간'},{id:'list',num:'②',label:'목록'}];
@@ -38171,10 +38290,10 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
   const cals=st.cals||{work:true,personal:true};
   const events=db.events.filter(e=>cals[e.cal]);
   const categories=[...new Set(db.events.map(e=>e.category).filter(Boolean))].sort();
-  const save=ev=>{const exists=db.events.some(e=>e.id===ev.id);setDb('events',exists?db.events.map(e=>e.id===ev.id?ev:e):[...db.events,ev]);};
-  const del=id=>{setDb('events',db.events.filter(e=>e.id!==id));set({edit:null});toast('삭제됨');};
+  const save=ev=>setDb('events',arr=>arr.some(e=>e.id===ev.id)?arr.map(e=>e.id===ev.id?ev:e):[...arr,ev]);
+  const del=id=>{Store.why='일정 삭제(직접)';setDb('events',arr=>arr.filter(e=>e.id!==id));set({edit:null});toast('삭제됨');};
   /* 휴지통에 떨궈 지우기 — 되돌리기(↶ · Ctrl+Z)로 되살릴 수 있다 */
-  const delQuiet=id=>{const e=db.events.find(x=>x.id===id);if(!e)return;
+  const delQuiet=id=>{Store.why='일정 삭제(휴지통에 떨굼)';const e=db.events.find(x=>x.id===id);if(!e)return;
     setDb('events',arr=>arr.filter(x=>x.id!==id));toast('🗑 『'+(e.title||'제목 없음')+'』 삭제 · ↶ 로 되돌릴 수 있습니다');};
   /* 폰 달력 배율 — 고른 값을 기억한다 */
   const [zoom,setZoom]=React.useState(()=>{const v=parseFloat(localStorage.getItem('pms.calzoom'));return isFinite(v)?v:2;});
@@ -38190,7 +38309,7 @@ function CalendarView({db,setDb,st,set,toast,sendToNote}){
     save({...e,...patch});toast('『'+(e.title||'제목 없음')+'』 → '+(patch.date||e.date)+(patch.start?' '+patch.start:patch.start===''?' 종일':''));};
   const step=n=>{const d=new Date(anchor+'T00:00:00');if(sub==='week')d.setDate(d.getDate()+7*n);else d.setMonth(d.getMonth()+n);set({anchor:isoDate(d)});};
   const exportICS=()=>{const blob=new Blob([toICS(db.events)],{type:'text/calendar'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='pms-calendar.ics';a.click();toast('ICS 내보내기');};
-  const importICS=async fs=>{let n=0;for(const f of fs){const evs=fromICS(await f.text());n+=evs.length;setDb('events',[...db.events,...evs]);}set({icsOpen:false});toast(n+'건 가져옴');};
+  const importICS=async fs=>{let n=0;for(const f of fs){const evs=fromICS(await f.text());n+=evs.length;setDb('events',arr=>[...arr,...evs]);}set({icsOpen:false});toast(n+'건 가져옴');};
   const label=view==='list'?'목록':sub==='week'?weekStart(anchor)+' 주':anchor.slice(0,4)+'년 '+Number(anchor.slice(5,7))+'월';
   const seg=view==='month'&&<span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:6}}>
     {[['month','월간'],['week','주간']].map(([k,l])=><button key={k} type="button" onClick={()=>set({sub:k})} style={{border:'none',borderRadius:4,padding:'3px 11px',fontSize:'var(--fs-sm2)',fontWeight:sub===k?600:500,background:sub===k?'var(--surface-active)':'transparent',color:sub===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span>;
@@ -38864,7 +38983,7 @@ function AskView({db,setDb,st,set,toast,onOpenNote}){
     catch(e){toast('⚠ '+e.message);}
     setBusy(false);};
   const saveNote=()=>{const n=newNote(a.q,'work','# '+a.q+'\n\n'+a.text+'\n\n## 출처\n- 위키 물어보기 · '+todayISO());
-    setDb('notes',[...db.notes,n]);onOpenNote(n.id);toast('노트로 저장');};
+    setDb('notes',arr=>[...arr,n]);onOpenNote(n.id);toast('노트로 저장');};
   const used=a?a.used:null;const nUsed=used?used.notes.length+used.mails.length+used.events.length:0;
   return <Card title="물어보기" badge={<Badge tone="muted">노트 · 메일 · 일정에서 근거를 찾아 답합니다</Badge>}
     toolbarRight={a&&<><Button variant="gray" size="sm" onClick={saveNote}>답변을 노트로</Button><Button variant="ghost" size="sm" onClick={()=>set({answer:null})}>지우기</Button></>}>
@@ -38914,7 +39033,15 @@ function IngestModal({open,sources,db,setDb,onClose,toast}){
     let arr=work.current;
     if(p.id){arr=arr.map(n=>n.id===p.id?{...n,md:p.md,updated:nowStamp()}:n);}
     else{arr=[...arr,{...newNote(p.target,p.scope,p.md),updated:nowStamp()}];}
-    work.current=arr;setDb('notes',arr);setDone(d=>d+1);next();};
+    work.current=arr;
+    /* 오래 걸리는 작업이라 그 사이 다른 화면에서 노트가 늘거나 줄 수 있다 —
+       지금 저장된 목록을 바탕으로 이번에 바뀐 것만 얹는다(통째로 덮어쓰지 않는다) */
+    const touched=p.id?arr.find(n=>n.id===p.id):arr[arr.length-1];
+    setDb('notes',cur=>{
+      if(!touched)return cur;
+      return cur.some(n=>n.id===touched.id)?cur.map(n=>n.id===touched.id?touched:n):[...cur,touched];
+    });
+    setDone(d=>d+1);next();};
   const lines=s=>(s||'').split('\n');
   const beforeL=lines(p&&p.before),afterL=lines(p&&p.md);
   const bset=new Set(beforeL),aset=new Set(afterL);
@@ -38956,8 +39083,8 @@ function LintView({db,setDb,toast,onOpenNote}){
   const {Card,Button,Badge,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
   const {issues,dup,total}=React.useMemo(()=>wikiLint(db),[db.notes]);
   const groups={};issues.forEach(x=>{(groups[x.type]=groups[x.type]||[]).push(x);});
-  const upd=(id,patch)=>setDb('notes',db.notes.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
-  const makeNote=(x)=>{const n=newNote(x.link,x.note.scope||'work');setDb('notes',[...db.notes,n]);toast('노트 생성 · '+x.link);};
+  const upd=(id,patch)=>setDb('notes',arr=>arr.map(n=>n.id===id?{...n,...patch,updated:nowStamp()}:n));
+  const makeNote=(x)=>{const n=newNote(x.link,x.note.scope||'work');setDb('notes',arr=>[...arr,n]);toast('노트 생성 · '+x.link);};
   const dropLink=(x)=>upd(x.note.id,{md:removeWikiLink(x.note.md,x.link)});
   const order=['broken','check','thin','orphan','nosrc','stale'];
   const none=!issues.length&&!dup.length;
@@ -39169,7 +39296,9 @@ function VaultModal({open,onClose,db,setDb,toast}){
         const nm=bins[i].name.split('/').pop();
         try{const r=await Files.put(new File([bins[i].bytes],nm,{type:guessType(nm)}));attMap[nm]=r.path;}catch(_){}}
       const r=mergeNotes(db.notes,mds,opt.same,attMap);
-      setDb('notes',r.notes);toast('새 노트 '+r.add+'개 · 갱신 '+r.upd+'개');onClose();
+      /* 첨부를 올리는 동안 다른 화면에서 노트가 바뀌었을 수 있다 — 결과를 id 기준으로 얹는다 */
+      setDb('notes',cur=>{const m=new Map(cur.map(n=>[n.id,n]));(r.notes||[]).forEach(n=>m.set(n.id,n));return [...m.values()];});
+      toast('새 노트 '+r.add+'개 · 갱신 '+r.upd+'개');onClose();
     }catch(e){toast('⚠ '+e.message);}
     setBusy('');};
   const row=(k,label,desc)=><label style={{display:'flex',gap:8,alignItems:'flex-start',padding:'7px 10px',border:'1px solid var(--border-default)',borderRadius:4,cursor:'pointer',marginBottom:6}}>
@@ -39369,7 +39498,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
   /* 일괄 선택 */
   const toggle=id=>set({picked:picked.includes(id)?picked.filter(x=>x!==id):[...picked,id]});
   const allOn=list.length>0&&list.every(n=>picked.includes(n.id));
-  const bulkDelete=()=>{setDb('notes',arr=>arr.filter(n=>!picked.includes(n.id)));set({picked:[],sel:picked.includes(st.sel)?null:st.sel});toast(picked.length+'개 삭제됨');};
+  const bulkDelete=()=>{Store.why='노트 삭제(여러 건 선택)';setDb('notes',arr=>arr.filter(n=>!picked.includes(n.id)));set({picked:[],sel:picked.includes(st.sel)?null:st.sel});toast(picked.length+'개 삭제됨');};
   const bulkScope=sc=>{setDb('notes',arr=>arr.map(n=>picked.includes(n.id)?{...n,scope:sc,updated:nowStamp()}:n));set({picked:[]});toast(picked.length+'개 → '+SCOPE_LABEL[sc]);};
   const bulkTag=()=>{const t=prompt('추가할 태그 (쉼표로 여러 개)');if(!t)return;const add=t.split(',').map(x=>x.trim().replace(/^#/,'')).filter(Boolean);
     setDb('notes',arr=>arr.map(n=>picked.includes(n.id)?{...n,tags:[...new Set([...(n.tags||[]),...add])],updated:nowStamp()}:n));set({picked:[]});toast('태그 추가됨');};
@@ -39412,7 +39541,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
             {[['read','읽기'],['edit','편집']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mmode:k})}
               style={{border:'none',borderRadius:4,padding:'2px 9px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,
                 background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span>}/></div>}
-        <NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onErr={m=>toast('⚠ '+m)} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{setDb('notes',notes.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/></div>}
+        <NoteEditor key={cur.id} n={cur} mode={mode} upd={upd} onErr={m=>toast('⚠ '+m)} onWiki={openByTitle} backlinks={backlinks} onPick={id=>set({sel:id})} onDelete={()=>{Store.why='노트 삭제(직접)';setDb('notes',arr=>arr.filter(x=>x.id!==cur.id));set({sel:null});toast('삭제됨');}} titles={notes.filter(x=>x.id!==cur.id).map(x=>x.title)} allTags={[...new Set(notes.flatMap(x=>x.tags||[]))]}/></div>}
     </div>
     <VaultModal open={!!st.vault} onClose={()=>set({vault:false})} db={db} setDb={setDb} toast={toast}/>
     <IngestModal open={!!(st.ingest&&st.ingest.length)} sources={st.ingest} db={db} setDb={setDb} toast={toast} onClose={()=>set({ingest:null,picked:[]})}/>
@@ -39875,7 +40004,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v7.0';
+const APP_VERSION='v7.4';
 /* ── 새 버전 확인 ─────────────────────────────────────
    홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
    그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
@@ -40074,6 +40203,7 @@ function Shell({user,onLogout}){
   const pullRef=React.useRef({at:'',busy:false});
   const cloudPull=React.useCallback(async()=>{
     if(Store.mode!=='supabase')return 0;
+    Store.why='클라우드에서 받아오기';
     const P=pullRef.current;if(P.busy)return 0;
     P.busy=true;
     try{
@@ -40107,7 +40237,7 @@ function Shell({user,onLogout}){
       });
       return n;
     }catch(_){return 0;}
-    finally{P.busy=false;}
+    finally{P.busy=false;Store.why='';}
   },[]);
   /* 화면을 다시 보게 될 때 + 3분마다 조용히 받아 온다 */
   /* 마지막 수단 — 클라우드에서 전부 다시 읽어 화면을 통째로 맞춘다 */
