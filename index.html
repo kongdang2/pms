@@ -36735,6 +36735,7 @@ class LiveConn{
     if(!jwt)throw new Error('로그인 세션이 없습니다 — 다시 로그인하세요');
     const q=new URLSearchParams({jwt,model:s.opt.model,from:s.opt.from,to:s.opt.to});
     if(s.opt.host)q.set('host',s.opt.host);
+    const vm=(Store.cfg.liveVoice||{})[s.opt.model];if(vm)q.set('voice',vm);
     if(Store.cfg.supabaseKey)q.set('apikey',Store.cfg.supabaseKey);
     const url=String(Store.cfg.supabaseUrl||'').replace(/\/+$/,'').replace(/^http/i,'ws')+'/functions/v1/livetranslate?'+q;
     const ws=new WebSocket(url);this.ws=ws;
@@ -36749,10 +36750,14 @@ class LiveConn{
   close(){try{this.ws&&this.ws.close();}catch(_){}}
   handle(ev){
     const s=this.sess,t=ev.type||'';
-    if(t==='relay.ready'){this.ready=true;s.log('연결 '+this.n+' 준비 · '+ev.model);s.bump();return;}
+    if(t==='relay.ready'){this.ready=true;this.readyAt=Date.now();s.log('연결 '+this.n+' 준비 · '+ev.model);s.bump();return;}
+    if(t==='relay.voice'){s.log('목소리 바꿔 재설정 → '+ev.voice+' ('+(ev.reason||'')+')');return;}
+    if(t==='relay.voiceok'){s.log('설정 완료 · 목소리 '+ev.voice);if(/voice/i.test(s.err))s.err='';
+      Store.saveCfg({liveVoice:{...(Store.cfg.liveVoice||{}),[s.opt.model]:ev.voice}});s.bump();return;}
     if(t==='relay.error'){s.fail(ev.message||'중계 오류');return;}
     if(t==='error'){s.fail((ev.error&&(ev.error.message||ev.error.code))||'통역 서버 오류');return;}
     if(t==='session.finished'){this.close();return;}
+    if(/^(conversation\.item\.input_audio_transcription|response\.text)/.test(t)&&s.err&&this.ready)s.err='';
     if(t==='conversation.item.input_audio_transcription.text'){const g=this.seg(this.si);g.zh=liveMerge(g.zh,ev.text||'');g.zhS=ev.stash||'';s.bump();return;}
     if(t==='conversation.item.input_audio_transcription.completed'){const g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;this.si++;s.bump();return;}
     if(t==='response.text.text'||t==='response.audio_transcript.text'||t==='response.text.delta'){const g=this.seg(this.ti);g.ko=liveMerge(g.ko,ev.text||ev.delta||'');g.koS=ev.stash||'';s.bump();return;}
@@ -36818,9 +36823,10 @@ class LiveSession{
     this.log('연결 '+c.n+' 닫힘'+(e&&e.code?' ('+e.code+(e.reason?' '+e.reason:'')+')':''));
     if(c===this.active){this.active=null;
       if(this.running&&!c.finishing){
-        if(!c.ready){this.fails++;if(this.fails>=3){this.fail(this.err||'통역 서버에 연결하지 못했습니다 — Edge Function livetranslate 배포와 "Verify JWT with legacy secret" 끄기를 확인하세요');this.stop(true);return;}}
+        const quick=!c.ready||(Date.now()-(c.readyAt||0)<8000&&!c.segs.length);   /* 열리자마자 끊기면 실패로 센다 */
+        if(quick){this.fails++;if(this.fails>=3){this.fail(this.err||'통역 서버에 연결하지 못했습니다 — Edge Function livetranslate 배포와 "Verify JWT with legacy secret" 끄기를 확인하세요');this.stop(true);return;}}
         else this.fails=0;
-        setTimeout(()=>this.running&&!this.pendingConn&&this.connect(),c.ready?200:1500);}}
+        setTimeout(()=>this.running&&!this.pendingConn&&this.connect(),quick?1500:200);}}
     else if(c===this.pendingConn&&this.running){this.pendingConn=null;this.fails++;
       if(this.fails>=3&&!this.active){this.fail(this.err||'통역 서버에 연결하지 못했습니다 — Edge Function livetranslate 배포와 "Verify JWT with legacy secret" 끄기를 확인하세요');this.stop(true);return;}
       if(!this.active)setTimeout(()=>this.running&&!this.pendingConn&&this.connect(),1500);}
@@ -40268,7 +40274,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v7.7';
+const APP_VERSION='v7.7.1';
 /* ── 새 버전 확인 ─────────────────────────────────────
    홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
    그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
