@@ -36704,16 +36704,25 @@ function RecButton({onDone,onErr}){
 }
 Object.assign(window,{transcribeAttachment,AUDIO_EXT,WHISPER_OK,needConvert,transcribeBlob,toWavSegments,wavBlob,audioRefs,PmsAudio,RecButton,mmss,blobB64,SEG_SEC});
 </script>
-<script type="text/babel">/* ── 실시간 통역 (Qwen LiveTranslate) ───────────────────────────
+<script type="text/babel">/* ── 통역 (실시간) ────────────────────────────────────────────
    마이크 → 16kHz PCM 조각(0.1초) → WebSocket → Edge Function 'livetranslate'(키 보관) → Alibaba
-   받는 것: 원문 받아쓰기(중국어) + 번역(한국어) 글자. 소리 출력은 쓰지 않는다(글자만 → 싸다).
+   두 가지 방식
+   · 정확도 우선(asr)  — Alibaba는 받아쓰기만(qwen-audio-3.1, 용어 힌트=핫워드). 문장이 끝나면 앱이 Claude로
+                         앞 문장들을 곁들여 번역한다. 자막이 1~2초 늦지만 완성된 문장을 보고 번역하므로 정확하다
+   · 속도 우선(live)   — Qwen LiveTranslate 동시통역. 말하는 도중에 번역이 나온다
+   같은 마이크 소리를 녹음해 두었다가(15분마다 조각) 끝나면 기록에 붙인다 → 번역·전사에서 정본을 만든다
    한 연결은 Supabase에서 약 150초에 끊기므로 LIVE_ROTATE_MS 마다 새 연결을 먼저 열고 넘겨준 뒤
-   옛 연결에는 session.finish를 보내 마지막 문장까지 받고 닫는다. 끊김 없이 이어진다. */
+   옛 연결에는 session.finish를 보내 마지막 문장까지 받고 닫는다. */
 const LIVE_RATE=16000;
 const LIVE_CHUNK=1600;               /* 0.1초 */
 const LIVE_ROTATE_MS=120*1000;       /* 무료 플랜 150초 한도보다 여유 있게 */
-const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 (최신·빠름)'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 (안정)'}];
+const LIVE_REC_SPLIT=15*60*1000;     /* 녹음 조각 */
+const LIVE_MODES=[{id:'asr',label:'🎯 정확도 우선',desc:'받아쓰기 + Claude 문장 번역 · 자막 3~5초'},{id:'live',label:'⚡ 속도 우선',desc:'동시통역 모델 · 자막 2~3초'}];
+const LIVE_MODELS=[{id:'qwen3.8-livetranslate-flash-realtime',label:'Qwen3.8 LiveTranslate'},{id:'qwen3.5-livetranslate-flash-realtime',label:'Qwen3.5 LiveTranslate'}];
+const LIVE_ASR_MODELS=[{id:'qwen-audio-3.1-asr-flash-streaming',label:'Qwen-Audio 3.1 받아쓰기'},{id:'fun-asr-realtime',label:'Fun-ASR 받아쓰기'}];
+const LIVE_TR_MODELS=[{id:'claude-haiku-4-5-20251001',label:'번역 Haiku (빠름)'},{id:'claude-sonnet-5',label:'번역 Sonnet (정확)'}];
 const LIVE_LANGS=[{id:'zh',label:'중국어'},{id:'en',label:'영어'},{id:'ja',label:'일본어'},{id:'ko',label:'한국어'}];
+const langLabel=id=>(LIVE_LANGS.find(l=>l.id===id)||{}).label||id;
 
 function pcm16b64(f32){
   const b=new Uint8Array(f32.length*2);const v=new DataView(b.buffer);
@@ -36729,13 +36738,15 @@ class LiveConn{
   constructor(sess,n){this.sess=sess;this.n=n;this.segs=[];this.si=0;this.ti=0;this.ready=false;this.finishing=false;this.gone=false;}
   seg(i){while(this.segs.length<=i)this.segs.push({zh:'',zhS:'',ko:'',koS:'',zhDone:false,koDone:false});return this.segs[i];}
   async open(){
-    const s=this.sess;
+    const s=this.sess,o=s.opt;
     const {data}=await Store.sb.auth.getSession();
     const jwt=data&&data.session&&data.session.access_token;
     if(!jwt)throw new Error('로그인 세션이 없습니다 — 다시 로그인하세요');
-    const q=new URLSearchParams({jwt,model:s.opt.model,from:s.opt.from,to:s.opt.to});
-    if(s.opt.host)q.set('host',s.opt.host);
-    const vm=(Store.cfg.liveVoice||{})[s.opt.model];if(vm)q.set('voice',vm);
+    const asr=o.mode==='asr';
+    const q=new URLSearchParams({jwt,mode:asr?'asr':'live',model:asr?o.asrModel:o.model,from:o.from,to:'ko'});
+    if(o.host)q.set('host',o.host);
+    if(asr){const hot=String(Store.cfg.sttHint||'').trim();if(hot)q.set('hot',hot.slice(0,1200));}
+    else{const vm=(Store.cfg.liveVoice||{})[o.model];if(vm)q.set('voice',vm);}
     if(Store.cfg.supabaseKey)q.set('apikey',Store.cfg.supabaseKey);
     const url=String(Store.cfg.supabaseUrl||'').replace(/\/+$/,'').replace(/^http/i,'ws')+'/functions/v1/livetranslate?'+q;
     const ws=new WebSocket(url);this.ws=ws;
@@ -36750,16 +36761,22 @@ class LiveConn{
   close(){try{this.ws&&this.ws.close();}catch(_){}}
   handle(ev){
     const s=this.sess,t=ev.type||'';
-    if(t==='relay.ready'){this.ready=true;this.readyAt=Date.now();s.log('연결 '+this.n+' 준비 · '+ev.model);s.bump();return;}
+    if(t==='relay.ready'){this.ready=true;this.readyAt=Date.now();s.log('연결 '+this.n+' 준비 · '+ev.model+(ev.hot?' · 핫워드 '+ev.hot+'개':''));s.bump();return;}
+    if(t==='relay.asrok'){s.log('받아쓰기 시작'+(ev.hot?' · 핫워드 '+ev.hot+'개 적용':''));if(s.err&&this.ready)s.err='';s.bump();return;}
+    if(t==='relay.note'){s.log(ev.message||'');return;}
     if(t==='relay.voice'){s.log('목소리 바꿔 재설정 → '+ev.voice+' ('+(ev.reason||'')+')');return;}
     if(t==='relay.voiceok'){s.log('설정 완료 · 목소리 '+ev.voice);if(/voice/i.test(s.err))s.err='';
       Store.saveCfg({liveVoice:{...(Store.cfg.liveVoice||{}),[s.opt.model]:ev.voice}});s.bump();return;}
+    if(t==='relay.upclose'){s.log('서버 쪽 연결 종료 '+(ev.code||'')+' '+(ev.reason||''));return;}
     if(t==='relay.error'){s.fail(ev.message||'중계 오류');return;}
     if(t==='error'){s.fail((ev.error&&(ev.error.message||ev.error.code))||'통역 서버 오류');return;}
     if(t==='session.finished'){this.close();return;}
     if(/^(conversation\.item\.input_audio_transcription|response\.text)/.test(t)&&s.err&&this.ready)s.err='';
     if(t==='conversation.item.input_audio_transcription.text'){const g=this.seg(this.si);g.zh=liveMerge(g.zh,ev.text||'');g.zhS=ev.stash||'';s.bump();return;}
-    if(t==='conversation.item.input_audio_transcription.completed'){const g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;this.si++;s.bump();return;}
+    if(t==='conversation.item.input_audio_transcription.completed'){const g=this.seg(this.si);g.zh=ev.transcript||g.zh;g.zhS='';g.zhDone=true;this.si++;
+      if(s.opt.mode==='asr'){if(g.zh.trim())s.translate(g);else g.koDone=true;}
+      s.bump();return;}
+    if(s.opt.mode==='asr')return;
     if(t==='response.text.text'||t==='response.audio_transcript.text'||t==='response.text.delta'){const g=this.seg(this.ti);g.ko=liveMerge(g.ko,ev.text||ev.delta||'');g.koS=ev.stash||'';s.bump();return;}
     if(t==='response.text.done'||t==='response.audio_transcript.done'){const g=this.seg(this.ti);g.ko=ev.text||ev.transcript||g.ko;g.koS='';g.koDone=true;this.ti++;s.bump();return;}
   }
@@ -36767,12 +36784,13 @@ class LiveConn{
 
 class LiveSession{
   constructor(opt,onChange){this.opt=opt;this.onChange=onChange;this.conns=[];this.active=null;this.queue=[];this.n=0;
-    this.running=false;this.err='';this.logs=[];this.level=0;this.t0=0;this.fails=0;}
-  log(m){this.logs.push(new Date().toLocaleTimeString('ko-KR')+' '+m);if(this.logs.length>40)this.logs.shift();console.log('[PMS 통역]',m);}
+    this.running=false;this.err='';this.logs=[];this.level=0;this.t0=0;this.fails=0;this.recParts=[];this.trN=0;}
+  log(m){this.logs.push(new Date().toLocaleTimeString('ko-KR')+' '+m);if(this.logs.length>60)this.logs.shift();console.log('[PMS 통역]',m);}
   bump(){if(this._raf)return;this._raf=requestAnimationFrame(()=>{this._raf=0;this.onChange&&this.onChange();});}
   get segs(){return this.conns.flatMap(c=>c.segs);}
   async start(){
-    if(Store.mode!=='supabase')throw new Error('실시간 통역은 클라우드(Supabase) 연결이 필요합니다 — 키가 서버에 있기 때문입니다');
+    if(Store.mode!=='supabase')throw new Error('통역은 클라우드(Supabase) 연결이 필요합니다 — 키가 서버에 있기 때문입니다');
+    if(this.opt.mode==='asr'&&claudeMode()==='none')throw new Error('정확도 우선은 Claude 번역을 씁니다 — 설정 › Claude 연결을 먼저 확인하거나 ⚡ 속도 우선을 고르세요');
     const raw=!this.opt.clean;
     this.stream=await navigator.mediaDevices.getUserMedia({audio:{
       deviceId:this.opt.device?{exact:this.opt.device}:undefined,channelCount:1,
@@ -36801,10 +36819,47 @@ class LiveSession{
     src.connect(proc);
     const mute=ctx.createGain();mute.gain.value=0;proc.connect(mute);mute.connect(ctx.destination);
     this.running=true;this.t0=Date.now();this.err='';
+    if(this.opt.record!==false)this.startRec();
     try{if(navigator.wakeLock)this.lock=await navigator.wakeLock.request('screen');}catch(_){}
     try{KeepAwake.on();}catch(_){}
     await this.connect();
     this.rot=setInterval(()=>this.rotate(),LIVE_ROTATE_MS);
+  }
+  /* 녹음 — 같은 마이크 소리를 파일로. 15분마다 조각내서 나중에 전사하기 쉽게 */
+  startRec(){
+    if(!window.MediaRecorder||!this.stream)return;
+    const mime=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(m=>MediaRecorder.isTypeSupported(m))||'';
+    let rec;try{rec=new MediaRecorder(this.stream,mime?{mimeType:mime,audioBitsPerSecond:32000}:undefined);}catch(e){this.log('녹음 불가: '+e.message);return;}
+    const chunks=[];const t0=Date.now();this.rec=rec;
+    rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data);};
+    rec.onstop=()=>{
+      const blob=new Blob(chunks,{type:(chunks[0]&&chunks[0].type)||mime||'audio/webm'});
+      if(blob.size>2000)this.recParts.push({blob,t0,sec:Math.round((Date.now()-t0)/1000)});
+      if(this.running)this.startRec();else{this.rec=null;this.recDone&&this.recDone();}
+    };
+    rec.start(1000);
+    clearTimeout(this.recT);this.recT=setTimeout(()=>{if(this.running&&this.rec===rec)try{rec.stop();}catch(_){}} ,LIVE_REC_SPLIT);
+  }
+  /* 녹음이 다 닫힐 때까지 (최대 4초) */
+  recFinished(){return new Promise(ok=>{if(!this.rec)return ok();this.recDone=ok;setTimeout(ok,4000);});}
+  /* 정확도 우선: 끝난 문장을 Claude로 번역. 앞 문장들을 문맥으로 곁들인다 */
+  async translate(g){
+    const all=this.segs.filter(x=>x.zhDone&&x.zh.trim());const i=all.indexOf(g);
+    const prev=all.slice(Math.max(0,i-5),i).map(x=>'- '+x.zh+(x.ko?'\n  → '+x.ko:'')).join('\n');
+    const hint=String(Store.cfg.sttHint||'').trim();
+    g.koS='번역 중…';this.bump();const n=++this.trN;
+    const system='너는 석유화학 회사 회의의 실시간 통역사다. '+langLabel(this.opt.from)+' 발화를 한국어 자막으로 옮긴다.\n'
+      +'- 번역문만 출력한다(설명·따옴표·원문 반복 금지)\n'
+      +'- 받아쓰기가 잘못 들은 낱말은 앞뒤 문맥과 용어 목록을 보고 바로잡아 번역한다\n'
+      +'- 인명·회사명·지명은 한국어 발음으로 적는다\n- 숫자·단위·가격·수량은 정확히\n'
+      +'- 문장이 중간에 끊겼으면 끊긴 대로 자연스럽게 옮긴다\n- 회의체 존댓말 구어체'
+      +(hint?'\n\n자주 나오는 용어: '+hint:'');
+    const prompt=(prev?'앞선 발화(참고용):\n'+prev+'\n\n':'')+'이번 발화를 번역하라:\n'+g.zh;
+    try{
+      const out=await askClaude(prompt,{system,model:this.opt.trModel||LIVE_TR_MODELS[0].id,max_tokens:600});
+      g.ko=String(out||'').trim().replace(/^["“「]|["”」]$/g,'');g.koS='';
+    }catch(e){g.koS='⚠ 번역 실패 — '+(e.message||e);this.log('번역 실패 #'+n+': '+(e.message||e));}
+    g.koDone=true;this.bump();
   }
   async connect(){
     const c=new LiveConn(this,++this.n);this.conns.push(c);this.pendingConn=c;
@@ -36821,14 +36876,15 @@ class LiveSession{
   }
   onConnClose(c,e){
     this.log('연결 '+c.n+' 닫힘'+(e&&e.code?' ('+e.code+(e.reason?' '+e.reason:'')+')':''));
+    const MSG='통역 서버에 연결하지 못했습니다 — Edge Function livetranslate 배포와 "Verify JWT with legacy secret" 끄기를 확인하세요';
     if(c===this.active){this.active=null;
       if(this.running&&!c.finishing){
         const quick=!c.ready||(Date.now()-(c.readyAt||0)<8000&&!c.segs.length);   /* 열리자마자 끊기면 실패로 센다 */
-        if(quick){this.fails++;if(this.fails>=3){this.fail(this.err||'통역 서버에 연결하지 못했습니다 — Edge Function livetranslate 배포와 "Verify JWT with legacy secret" 끄기를 확인하세요');this.stop(true);return;}}
+        if(quick){this.fails++;if(this.fails>=3){this.fail(this.err||MSG);this.stop(true);return;}}
         else this.fails=0;
         setTimeout(()=>this.running&&!this.pendingConn&&this.connect(),quick?1500:200);}}
     else if(c===this.pendingConn&&this.running){this.pendingConn=null;this.fails++;
-      if(this.fails>=3&&!this.active){this.fail(this.err||'통역 서버에 연결하지 못했습니다 — Edge Function livetranslate 배포와 "Verify JWT with legacy secret" 끄기를 확인하세요');this.stop(true);return;}
+      if(this.fails>=3&&!this.active){this.fail(this.err||MSG);this.stop(true);return;}
       if(!this.active)setTimeout(()=>this.running&&!this.pendingConn&&this.connect(),1500);}
     this.bump();
   }
@@ -36840,7 +36896,9 @@ class LiveSession{
   rotate(){if(!this.running||this.pendingConn)return;this.connect();}
   fail(msg){this.err=msg;this.log('⚠ '+msg);if(!this.conns.some(c=>c.ready))this.stop(true);this.bump();}
   stop(hard){
-    this.running=false;clearInterval(this.rot);
+    const was=this.running;this.running=false;clearInterval(this.rot);clearTimeout(this.recT);
+    if(was&&!this.tEnd)this.tEnd=Date.now();
+    try{this.rec&&this.rec.state!=='inactive'&&this.rec.stop();}catch(_){}
     try{this.proc&&(this.proc.onaudioprocess=null);}catch(_){}
     try{this.stream&&this.stream.getTracks().forEach(t=>t.stop());}catch(_){}
     try{this.ctx&&this.ctx.close();}catch(_){}
@@ -36849,92 +36907,141 @@ class LiveSession{
     for(const c of this.conns)if(!c.gone){if(hard)c.close();else c.finish();}
     this.level=0;this.bump();
   }
-  toMarkdown(title){
+  get minutes(){return Math.max(1,Math.round(((this.tEnd||Date.now())-this.t0)/60000));}
+  toMarkdown(title,audioLinks){
     const segs=this.segs.filter(g=>(g.zh||g.ko).trim());
-    const fromL=(LIVE_LANGS.find(l=>l.id===this.opt.from)||{}).label||this.opt.from;
-    const pairs=segs.map(g=>'- '+(g.ko||g.koS||'(번역 없음)').trim()+'\n  <br><small>'+(g.zh||g.zhS).trim()+'</small>').join('\n');
+    const how=this.opt.mode==='asr'?'정확도 우선 (받아쓰기 + Claude 번역)':'속도 우선 (동시통역)';
+    /* 번역(굵게) 아래 원문 한 줄 — 빈 줄로 문장 단위를 나눈다 */
+    const pairs=segs.map(g=>'**'+(((g.ko||'').trim()||'(번역 없음)').replace(/\*/g,''))+'**\n'+(g.zh||g.zhS).trim()).join('\n\n');
     const raw=segs.map(g=>(g.zh||g.zhS).trim()).filter(Boolean).join('\n');
-    const mins=Math.max(1,Math.round((Date.now()-this.t0)/60000));
-    return '# '+title+'\n\n> 🎧 실시간 통역 · '+fromL+' → 한국어 · 약 '+mins+'분 · '+(this.opt.model||'')+'\n\n## 실시간 통역\n'+pairs+'\n\n## 녹취\n'+raw+'\n';
+    return '# '+title+'\n\n> 🗣 실시간 통역 · '+langLabel(this.opt.from)+' → 한국어 · 약 '+this.minutes+'분 · '+how+'\n\n'
+      +(audioLinks&&audioLinks.length?audioLinks.join('\n')+'\n\n':'')
+      +'## 실시간 통역\n'+(pairs||'(자막 없음)')+'\n\n## 실시간 원문\n'+(raw||'(없음)')+'\n';
   }
 }
+/* 화면을 옮겨도(메일 확인 등) 통역이 끊기지 않도록 세션은 화면 밖에 둔다 */
+const LIVE={sess:null,saved:null};
 
-function LiveInterp({open,onClose,onSave,toast}){
-  const {Modal,Button,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
+function LiveView({db,setDb,toast,onOpenNote}){
+  const {Card,Button,InfoBar,Badge}=window.HDWorkbookDesignSystem_ad60e4;
   const mobile=useMobile();
   const [,force]=React.useReducer(x=>x+1,0);
-  const [opt,setOpt]=React.useState(()=>({model:Store.cfg.liveModel||LIVE_MODELS[0].id,from:Store.cfg.liveFrom||'zh',to:'ko',
-    host:Store.cfg.liveHost||'',clean:!!Store.cfg.liveClean,device:''}));
-  const [devs,setDevs]=React.useState([]);const [adv,setAdv]=React.useState(false);
-  const S=React.useRef(null);const box=React.useRef(null);const stick=React.useRef(true);
-  const sess=S.current;const running=!!(sess&&sess.running);
-  React.useEffect(()=>{if(!open)return;
-    navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&navigator.mediaDevices.enumerateDevices()
-      .then(d=>setDevs(d.filter(x=>x.kind==='audioinput'))).catch(()=>{});},[open,running]);
+  const [opt,setOpt]=React.useState(()=>({mode:Store.cfg.liveMode||'asr',model:Store.cfg.liveModel||LIVE_MODELS[0].id,
+    asrModel:Store.cfg.liveAsrModel||LIVE_ASR_MODELS[0].id,trModel:Store.cfg.liveTrModel||LIVE_TR_MODELS[0].id,
+    from:Store.cfg.liveFrom||'zh',host:Store.cfg.liveHost||'',clean:!!Store.cfg.liveClean,record:Store.cfg.liveRecord!==false,device:''}));
+  const [devs,setDevs]=React.useState([]);const [adv,setAdv]=React.useState(false);const [saving,setSaving]=React.useState('');
+  const box=React.useRef(null);const stick=React.useRef(true);
+  const sess=LIVE.sess;const running=!!(sess&&sess.running);
+  React.useEffect(()=>{if(LIVE.sess)LIVE.sess.onChange=force;return()=>{if(LIVE.sess)LIVE.sess.onChange=null;};},[sess]);
+  React.useEffect(()=>{navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices&&navigator.mediaDevices.enumerateDevices()
+      .then(d=>setDevs(d.filter(x=>x.kind==='audioinput'&&x.deviceId))).catch(()=>{});},[running]);
   React.useEffect(()=>{const t=running&&setInterval(force,1000);return()=>clearInterval(t);},[running]);
-  React.useEffect(()=>()=>{S.current&&S.current.running&&S.current.stop(true);},[]);
   React.useEffect(()=>{const el=box.current;if(el&&stick.current)el.scrollTop=el.scrollHeight;});
+  const set=p=>setOpt(o=>({...o,...p}));
   const start=async()=>{
-    Store.saveCfg({liveModel:opt.model,liveFrom:opt.from,liveHost:opt.host,liveClean:opt.clean});
-    const s=new LiveSession({...opt},force);S.current=s;force();
+    Store.saveCfg({liveMode:opt.mode,liveModel:opt.model,liveAsrModel:opt.asrModel,liveTrModel:opt.trModel,liveFrom:opt.from,liveHost:opt.host,liveClean:opt.clean,liveRecord:opt.record});
+    const s=new LiveSession({...opt},force);LIVE.sess=s;LIVE.saved=null;force();
     try{await s.start();}
     catch(e){s.stop(true);s.err=/NotAllowed|Permission/i.test(e.name+e.message)?'마이크 사용이 거부됐습니다 — 주소창의 자물쇠에서 마이크를 허용하세요':e.message;force();}
   };
-  const stop=()=>{sess&&sess.stop(false);force();};
-  const save=()=>{if(!sess)return;
-    const d=new Date(sess.t0||Date.now());
-    const title='실시간 통역 '+isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
-    if(!sess.segs.some(g=>(g.zh||g.ko).trim())){toast('저장할 내용이 아직 없습니다');return;}
-    onSave(title,sess.toMarkdown(title));};
-  const close=()=>{if(running&&!confirm('통역을 멈추고 닫을까요? (저장하지 않은 내용은 사라집니다)'))return;
-    if(sess&&sess.running)sess.stop(false);S.current=null;onClose();};
+  /* 정지 → 녹음 올리기 → 기록 자동 저장 */
+  const stop=async()=>{
+    const s=LIVE.sess;if(!s)return;s.stop(false);force();
+    const hasText=s.segs.some(g=>(g.zh||g.ko).trim());
+    setSaving('녹음 정리 중…');await s.recFinished();
+    if(!hasText&&!s.recParts.length){setSaving('');return;}
+    /* 번역이 아직 돌고 있으면 잠깐 기다린다(최대 8초) */
+    for(let i=0;i<16&&s.segs.some(g=>g.zhDone&&!g.koDone);i++)await new Promise(r=>setTimeout(r,500));
+    const d=new Date(s.t0||Date.now());const stamp=isoDate(d)+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
+    const title='통역 '+stamp;const links=[];
+    for(let i=0;i<s.recParts.length;i++){
+      setSaving('녹음 올리는 중 '+(i+1)+'/'+s.recParts.length);
+      const p=s.recParts[i];const ext=/mp4/.test(p.blob.type)?'m4a':'webm';
+      const name='통역녹음 '+stamp.replace(':','')+(s.recParts.length>1?' ('+(i+1)+')':'')+'.'+ext;
+      try{const r=await Files.put(new File([p.blob],name,{type:p.blob.type||'audio/webm'}));links.push('[🎙 '+name+'](pms:'+r.path+')');}
+      catch(e){s.log('녹음 올리기 실패: '+e.message);toast('⚠ 녹음 올리기 실패 — '+e.message);}
+    }
+    const nn=newNote(title,'work',s.toMarkdown(title,links),['통역']);
+    setDb('notes',arr=>[...arr,nn]);LIVE.saved={id:nn.id,audio:links.length};setSaving('');force();
+    toast('통역 기록을 저장했습니다'+(links.length?' · 녹음 '+links.length+'개 포함':''));
+  };
+  const reset=()=>{LIVE.sess=null;LIVE.saved=null;force();};
   const segs=sess?sess.segs.filter(g=>g.zh||g.zhS||g.ko||g.koS):[];
   const secs=sess&&sess.t0?Math.floor(((sess.running?Date.now():(sess.tEnd||Date.now()))-sess.t0)/1000):0;
-  if(sess&&!sess.running&&!sess.tEnd&&sess.t0)sess.tEnd=Date.now();
   const lvl=Math.min(1,(sess&&sess.level||0)*3);
   const status=!sess?'대기':sess.running?(sess.active&&sess.active.ready?'통역 중':'연결 중…'):'멈춤';
   const sel={...inputStyle,width:'auto',padding:'4px 6px',fontSize:'var(--fs-sm2)'};
-  return <Modal open={open} onClose={close} title="🗣 실시간 통역" width={mobile?undefined:820}
-    footer={<>
-      {running?<Button variant="danger" onClick={stop}>■ 정지</Button>:<Button onClick={start}>● {sess?'다시 시작':'시작'}</Button>}
-      <Button variant="secondary" disabled={!segs.length} onClick={save} title="원문·번역을 새 노트로 저장합니다. 저장 뒤 🤖 정돈을 누르면 교정·요약까지 합니다">📝 노트로 저장</Button>
-      <Button variant="gray" onClick={close}>닫기</Button></>}>
-    <div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center',marginBottom:8,fontSize:'var(--fs-sm2)'}}>
-      <select style={sel} disabled={running} value={opt.from} onChange={e=>setOpt({...opt,from:e.target.value})}>{LIVE_LANGS.filter(l=>l.id!=='ko').map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
-      <span>→ 한국어</span>
-      <select style={sel} disabled={running} value={opt.model} onChange={e=>setOpt({...opt,model:e.target.value})}>{LIVE_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select>
-      {devs.length>1&&<select style={{...sel,maxWidth:200}} disabled={running} value={opt.device} onChange={e=>setOpt({...opt,device:e.target.value})}>
+  const recent=(db.notes||[]).filter(n=>(n.tags||[]).includes('통역')).slice().sort((a,b)=>String(b.updated).localeCompare(String(a.updated))).slice(0,15);
+  const saved=LIVE.saved&&(db.notes||[]).find(n=>n.id===LIVE.saved.id);
+  const modeDesc=(LIVE_MODES.find(m=>m.id===opt.mode)||{}).desc;
+  const main=<Card title="🗣 통역" badge={<Badge tone="muted">{status}</Badge>}
+    toolbar={running
+      ?<Button variant="danger" onClick={stop}>■ 정지</Button>
+      :<Button onClick={start} disabled={!!saving}>● {sess?'새로 시작':'시작'}</Button>}
+    toolbarRight={<span style={{display:'inline-flex',alignItems:'center',gap:8,fontSize:'var(--fs-sm2)'}}>
+      <span title="입력 소리 크기 — 말할 때 막대가 움직여야 합니다" style={{width:70,height:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-default)',borderRadius:4,overflow:'hidden'}}>
+        <span style={{display:'block',height:'100%',width:(lvl*100)+'%',background:lvl>0.9?'var(--color-danger)':'#16a34a',transition:'width .1s'}}/></span>
+      <span style={{fontFamily:'var(--font-num)'}}>{mmss(secs)}</span>
+      {sess&&sess.opt.record!==false&&running&&<span style={{color:'var(--color-danger)'}}>● 녹음</span>}</span>}>
+    <div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:6}}>
+      <span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
+        {LIVE_MODES.map(m=><button key={m.id} type="button" disabled={running} onClick={()=>set({mode:m.id})} title={m.desc}
+          style={{border:'none',borderRadius:4,padding:'4px 10px',fontSize:'var(--fs-sm2)',fontWeight:opt.mode===m.id?600:500,background:opt.mode===m.id?'var(--surface-active)':'transparent',
+            color:opt.mode===m.id?'var(--text-body)':'var(--text-muted)',cursor:running?'default':'pointer',fontFamily:'inherit'}}>{m.label}</button>)}</span>
+      <select style={sel} disabled={running} value={opt.from} onChange={e=>set({from:e.target.value})}>{LIVE_LANGS.filter(l=>l.id!=='ko').map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
+      <span style={{fontSize:'var(--fs-sm2)'}}>→ 한국어</span>
+      {devs.length>1&&<select style={{...sel,maxWidth:190}} disabled={running} value={opt.device} onChange={e=>set({device:e.target.value})}>
         <option value="">기본 마이크</option>{devs.map(d=><option key={d.deviceId} value={d.deviceId}>{d.label||'마이크'}</option>)}</select>}
-      <span style={{display:'inline-flex',alignItems:'center',gap:6,marginLeft:'auto'}}>
-        <span title="입력 소리 크기 — 말할 때 막대가 움직여야 합니다" style={{width:70,height:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-default)',borderRadius:4,overflow:'hidden'}}>
-          <span style={{display:'block',height:'100%',width:(lvl*100)+'%',background:lvl>0.9?'var(--color-danger)':'#16a34a',transition:'width .1s'}}/></span>
-        <b>{status}</b><span style={{fontFamily:'var(--font-num)'}}>{mmss(secs)}</span></span>
     </div>
-    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6}}>
-      <label style={{cursor:'pointer'}}><input type="checkbox" disabled={running} checked={opt.clean} onChange={e=>setOpt({...opt,clean:e.target.checked})}/> 잡음·에코 억제</label>
-      <span> — 휴대폰·스피커 소리를 노트북 마이크로 받을 때는 <b>끄세요</b>(켜면 재생 소리를 지워버립니다)</span>
-      <button type="button" onClick={()=>setAdv(!adv)} style={{marginLeft:8,border:'none',background:'none',color:'var(--text-link, #2563eb)',cursor:'pointer',fontSize:'inherit'}}>{adv?'▾':'▸'} 고급</button>
+    <div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginBottom:6,display:'flex',flexWrap:'wrap',gap:'4px 12px',alignItems:'center'}}>
+      <span>{modeDesc}</span>
+      <label style={{cursor:'pointer'}}><input type="checkbox" disabled={running} checked={opt.record} onChange={e=>set({record:e.target.checked})}/> 녹음도 저장 (나중에 정본 만들기)</label>
+      <label style={{cursor:'pointer'}} title="휴대폰·스피커 소리를 노트북 마이크로 받을 때는 끄세요(켜면 재생 소리를 지워버립니다)"><input type="checkbox" disabled={running} checked={opt.clean} onChange={e=>set({clean:e.target.checked})}/> 잡음·에코 억제</label>
+      <button type="button" onClick={()=>setAdv(!adv)} style={{border:'none',background:'none',color:'var(--text-link, #2563eb)',cursor:'pointer',fontSize:'inherit',padding:0}}>{adv?'▾':'▸'} 고급</button>
     </div>
-    {adv&&<div style={{display:'flex',gap:6,alignItems:'center',marginBottom:8,fontSize:'var(--fs-sm)'}}>
-      <span>서버 주소</span><input style={{...inputStyle,flex:1,padding:'4px 6px'}} disabled={running} value={opt.host} placeholder="비우면 dashscope-intl.aliyuncs.com — 안 되면 {WorkspaceId}.ap-southeast-1.maas.aliyuncs.com"
-        onChange={e=>setOpt({...opt,host:e.target.value.trim()})}/></div>}
+    {adv&&<div style={{display:'flex',flexWrap:'wrap',gap:6,alignItems:'center',marginBottom:8,fontSize:'var(--fs-sm)'}}>
+      {opt.mode==='asr'
+        ?<><select style={sel} disabled={running} value={opt.asrModel} onChange={e=>set({asrModel:e.target.value})}>{LIVE_ASR_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select>
+          <select style={sel} disabled={running} value={opt.trModel} onChange={e=>set({trModel:e.target.value})}>{LIVE_TR_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select></>
+        :<select style={sel} disabled={running} value={opt.model} onChange={e=>set({model:e.target.value})}>{LIVE_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}</select>}
+      <span>서버 주소</span><input style={{...inputStyle,flex:1,minWidth:200,padding:'4px 6px'}} disabled={running} value={opt.host} placeholder="비우면 dashscope-intl.aliyuncs.com"
+        onChange={e=>set({host:e.target.value.trim()})}/>
+      <span style={{width:'100%',color:'var(--text-label)'}}>용어 힌트(설정 › 음성)가 받아쓰기 핫워드와 번역 용어 목록으로 함께 쓰입니다{Store.cfg.sttHint?' · 지금 '+String(Store.cfg.sttHint).split(/[,，、;\n]/).filter(x=>x.trim()).length+'개':' · 아직 비어 있음'}</span></div>}
     {sess&&sess.err&&<InfoBar tone="warn">{sess.err}</InfoBar>}
+    {saving&&<InfoBar tone="info">{saving}</InfoBar>}
+    {saved&&!running&&<div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:8,padding:'8px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-sm2)'}}>
+      <span>✓ <b>{saved.title}</b> 저장됨{LIVE.saved.audio?' · 녹음 '+LIVE.saved.audio+'개':''}</span>
+      {LIVE.saved.audio>0&&<Button size="sm" onClick={()=>onOpenNote(saved.id,true)} title="녹음을 처음부터 다시 받아쓰고 정리·번역해 정확한 기록을 만듭니다(번역·전사 화면으로 이동)">🎯 정본 만들기</Button>}
+      <Button variant="gray" size="sm" onClick={()=>onOpenNote(saved.id,false)}>기록 열기</Button>
+      <Button variant="ghost" size="sm" onClick={reset}>화면 비우기</Button></div>}
     <div ref={box} onScroll={e=>{const el=e.currentTarget;stick.current=el.scrollHeight-el.scrollTop-el.clientHeight<40;}}
-      style={{height:mobile?'calc(100vh - 330px)':420,minHeight:220,overflowY:'auto',border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 12px',background:'#fff'}}>
+      style={{height:mobile?'calc(100vh - 360px)':'calc(100vh - 380px)',minHeight:260,overflowY:'auto',border:'1px solid var(--border-default)',borderRadius:4,padding:'8px 12px',background:'#fff'}}>
       {!segs.length&&<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:60,lineHeight:1.8}}>
-        {running?'듣고 있습니다 — 말이 시작되면 2~3초 뒤 자막이 나옵니다':<>▶ <b>시작</b>을 누르고 마이크를 허용하세요<br/><span style={{fontSize:'var(--fs-sm)'}}>휴대폰으로 시험할 때: 음량을 크게, 노트북 마이크 가까이, 위의 “잡음·에코 억제”는 끈 채로</span></>}</div>}
+        {running?'듣고 있습니다 — 말이 시작되면 몇 초 뒤 자막이 나옵니다':<>▶ <b>시작</b>을 누르고 마이크를 허용하세요<br/><span style={{fontSize:'var(--fs-sm)'}}>휴대폰으로 시험할 때: 음량을 크게, 노트북 마이크 가까이, “잡음·에코 억제”는 끈 채로</span></>}</div>}
       {segs.map((g,i)=><div key={i} style={{padding:'6px 0',borderBottom:'1px dashed var(--border-default)'}}>
-        <div style={{fontSize:mobile?17:18,lineHeight:1.5,color:'var(--text-body)'}}>{g.ko}<span style={{color:'var(--text-label)'}}>{g.koS}</span>{!g.ko&&!g.koS&&<span style={{color:'var(--text-label)'}}>…</span>}</div>
+        <div style={{fontSize:mobile?17:19,lineHeight:1.5,color:'var(--text-body)'}}>{g.ko}<span style={{color:'var(--text-label)',fontSize:g.ko?'inherit':'var(--fs-sm2)'}}>{g.koS}</span>{!g.ko&&!g.koS&&<span style={{color:'var(--text-label)'}}>…</span>}</div>
         <div style={{fontSize:'var(--fs-sm2)',color:'var(--text-muted)',marginTop:2}}>{g.zh}<span style={{opacity:.6}}>{g.zhS}</span></div>
       </div>)}
     </div>
     <div style={{fontSize:'var(--fs-sm)',color:'var(--text-label)',marginTop:6,display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-      <span>소리는 Alibaba(싱가포르)로 전송됩니다 · 대략 시간당 $0.3~0.5</span>
-      {sess&&<span title={sess.logs.join('\n')}>연결 {sess.n}회 · 로그에 마우스를 올려 보기</span>}
+      <span>소리는 Alibaba(싱가포르)로{opt.mode==='asr'?', 받아쓴 글은 Anthropic(Claude)으로':''} 전송됩니다 · 다른 메뉴로 옮겨도 통역은 계속됩니다</span>
+      {sess&&<span title={sess.logs.join('\n')} style={{cursor:'help'}}>연결 {sess.n}회 · 로그 보기(마우스 올리기)</span>}
     </div>
-  </Modal>;
+  </Card>;
+  if(mobile)return main;
+  return <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 260px',gap:14,alignItems:'start'}}>
+    {main}
+    <Card title="최근 통역 기록" badge={<Badge tone="muted">{recent.length}</Badge>}>
+      {!recent.length&&<div style={{color:'var(--text-label)',fontSize:'var(--fs-sm2)',padding:'8px 0'}}>아직 없습니다 — 통역을 멈추면 자동으로 저장됩니다</div>}
+      {recent.map(n=><div key={n.id} onClick={()=>onOpenNote(n.id,false)} role="button"
+        style={{padding:'7px 4px',borderBottom:'1px solid var(--border-default)',cursor:'pointer',fontSize:'var(--fs-sm2)'}}>
+        <div style={{fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{n.title}</div>
+        <div style={{color:'var(--text-label)',fontSize:'var(--fs-sm)'}}>{/정리·번역/.test(n.md)?'✓ 정본 있음':audioRefs(n.md).length?'🎙 녹음 있음 · 정본 전':'자막만'}</div>
+      </div>)}
+    </Card>
+  </div>;
 }
-Object.assign(window,{LiveInterp,LiveSession,LiveConn,liveMerge,pcm16b64,LIVE_MODELS});
+Object.assign(window,{LiveView,LiveSession,LiveConn,liveMerge,pcm16b64,LIVE_MODELS,LIVE});
 </script>
 <script type="text/babel">/* Gmail 연동: Google Identity Services(브라우저 OAuth 토큰) + Gmail REST API
    흐름: 연결(승인 창) → 토큰(1시간) → 받은편지함/보낸편지함 가져오기 · 보내기
@@ -37095,7 +37202,7 @@ function Login({onLogin}){
   return <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'var(--surface-sidebar)',fontFamily:'var(--font-sans)'}}>
     <div style={{width:380,background:'#fff',border:'1px solid var(--border-default)',borderRadius:8,padding:'28px 28px 22px'}}>
       <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><span style={{fontSize:24}} aria-hidden="true">🗂</span><h1 style={{margin:0,font:'600 18px/1.3 var(--font-sans)'}}>개인 업무 관리</h1><Badge tone="version">{window.APP_VERSION||'v5.0'}</Badge></div>
-      <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 지식</div>
+      <div style={{fontSize:'var(--fs-base)',color:'var(--text-muted)',marginBottom:18}}>메일 · 일정 · 통번역</div>
       <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>{cloud?<Badge tone="linked">☁ Supabase 연결됨 · {new URL(Store.cfg.supabaseUrl).host}</Badge>:<Badge tone="pill">💾 로컬 모드 · 이 브라우저에만 저장</Badge>}<Button variant="ghost" size="xs" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button></div>
       <Field label="이메일"><TextInput type="email" value={email} onChange={e=>setE(e.target.value)} placeholder="me@example.com" autoFocus/></Field>
       <Field label="비밀번호"><TextInput type="password" value={pw} onChange={e=>setP(e.target.value)} onKeyDown={e=>e.key==='Enter'&&go(false)} placeholder={cloud?'':'처음 입력한 비밀번호가 등록됩니다'}/></Field>
@@ -37533,7 +37640,7 @@ function ClaudeTab({c,setC}){
     <input type="radio" name="claudeVia" checked={via===id} disabled={disabled} onChange={()=>setC({...c,claudeVia:id})} style={{marginTop:3}}/>
     <span><span style={{fontWeight:600,fontSize:'var(--fs-md)'}}>{label}</span><div style={{fontSize:'var(--fs-sm)',color:'var(--text-muted)',marginTop:2}}>{sub}</div></span></label>;
   return <>
-    <InfoBar>지식 관리의 🤖 위키 정돈 · 물어보기 · 위키에 수집 · 정리·번역 · 이미지 읽기에 사용합니다. 사용량만큼 Anthropic에 과금됩니다(노트 1건 정돈 ≈ 5~10원).</InfoBar>
+    <InfoBar>통역(정확도 우선)의 문장 번역 · 번역·전사의 🤖 정돈(정리·번역) · 이미지 읽기에 사용합니다. 사용량만큼 Anthropic에 과금됩니다(노트 1건 정돈 ≈ 5~10원).</InfoBar>
     <InfoBar>🖼 <b>이미지 읽기</b>(노트에 붙인 사진·표를 Claude가 읽는 기능)를 쓰려면 Edge Function을 <b>새 코드로 다시 배포</b>해야 합니다 — 소스 묶음의 <code>supabase/functions/claude/index.ts</code>를 복사해 대시보드 › Edge Functions › claude › 코드 붙여넣기 › Deploy (가이드 10)</InfoBar>
     <Radio id="edge" label="Supabase Edge Function 경유 (권장)" sub={cloud?'API 키를 Supabase Secrets에만 보관. 로그인한 사용자만 호출 가능. 가이드 02 참고':'Supabase 연결 후 사용 가능'} disabled={!cloud}/>
     <Radio id="direct" label="브라우저에서 직접 호출" sub="이 브라우저에 키 저장. 간단하지만 HTML을 공유하거나 PC를 같이 쓰면 키가 노출될 수 있음"/>
@@ -39449,7 +39556,7 @@ const VAULT_README=`# 개인 업무 위키 vault
 - \`[[제목]]\` 링크와 \`#태그\`는 옵시디언에서 그대로 동작합니다
 - \`메일/\`, \`일정/\` — 함께 내보냈다면 기록용 사본입니다
 
-다시 앱으로 가져오려면 지식 › 노트 › **가져오기**에 이 ZIP(또는 .md 파일들)을 넣으면 됩니다.
+다시 앱으로 가져오려면 통번역 › 번역·전사 › **vault**에 이 ZIP(또는 .md 파일들)을 넣으면 됩니다.
 `;
 
 /* db → 내보낼 파일 목록 */
@@ -39582,9 +39689,11 @@ const SCOPES=['work','personal'];
 const SCOPE_LABEL={work:'업무',personal:'개인'};
 const SCOPE_COLOR={work:'#4E82AE',personal:'#0a6b3b'};
 function kbNav(st,set,db){
+  const live=st.view==='live';
   const tags=[...new Set(db.notes.flatMap(n=>n.tags||[]))].sort();
-  return [{label:'보기',items:[{id:'notes',num:'①',label:'노트'},{id:'graph',num:'②',label:'그래프'},{id:'ask',num:'③',label:'물어보기'},{id:'search',num:'④',label:'검색'},{id:'lint',num:'⑤',label:'점검'}],value:st.view,onChange:v=>set({view:v})},
-    {label:'태그',items:[{id:'',label:'# 전체 · '+db.notes.length},...tags.map(t=>({id:t,label:'# '+t+' · '+db.notes.filter(n=>(n.tags||[]).includes(t)).length}))],value:st.tag||'',onChange:v=>set({tag:v,view:'notes'})}];
+  const secs=[{label:'통번역',items:[{id:'live',num:'①',label:'통역'},{id:'notes',num:'②',label:'번역·전사'}],value:live?'live':'notes',onChange:v=>set({view:v})}];
+  if(!live)secs.push({label:'기록 분류',items:[{id:'',label:'# 전체 · '+db.notes.length},...tags.map(t=>({id:t,label:'# '+t+' · '+db.notes.filter(n=>(n.tags||[]).includes(t)).length}))],value:st.tag||'',onChange:v=>set({tag:v,view:'notes'})});
+  return secs;
 }
 const NOTE_TEMPLATE=t=>'# '+t+'\n\n한 줄 정의: \n\n## 핵심\n- \n\n## 관련\n- [[홈]]\n\n## 출처\n- \n';
 const newNote=(title,scope,md,tags)=>({id:uid(),title:title||'제목 없음',scope:scope||'work',tags:tags||[],updated:nowStamp(),md:md||NOTE_TEMPLATE(title||'제목 없음')});
@@ -39689,7 +39798,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
         /* 전사가 끝나면 정리·번역까지 이어서 — 받아쓴 그대로는 읽기 어렵다 */
         toast('전사 완료 — 이어서 정리·번역합니다');
         try{upd(cur.id,{md:await polishMd(withRaw)});
-          toast('전사·정리 완료 — 위키에 수집하면 물어보기의 근거가 됩니다');}
+          toast('전사·정리 완료');}
         catch(pe){toast('⚠ 정리·번역 실패 — 녹취는 남아 있습니다. 🈯 단추로 다시 시도하세요 ('+pe.message+')');}
       }catch(e){
         console.error('[PMS 전사 실패]',e.message);
@@ -39772,14 +39881,22 @@ function KnowledgeView({db,setDb,st,set,toast}){
       <GraphView notes={visible} sel={st.sel} onPick={id=>set({sel:id})} onOpen={id=>set({sel:id,view:'notes'})} onLink={linkNotes} onUnlink={unlinkNotes} onWiki={openByTitle}/>
     </Card>;
   if(st.view==='ask')return <AskView db={db} setDb={setDb} st={st} set={set} toast={toast} onOpenNote={id=>set({sel:id,view:'notes'})}/>;
+  /* 음성 파일 한 개 → 새 기록 → 받아쓰기·정리·번역까지 */
+  const uploadAudio=async f=>{
+    try{toast('올리는 중 · '+f.name);
+      const r=await Files.put(f);const t=f.name.replace(/\.[^.]+$/,'');
+      const nn=newNote(t,scopes.work?'work':'personal','# '+t+'\n\n[🎙 '+f.name+'](pms:'+r.path+')\n',['전사']);
+      setDb('notes',arr=>[...arr,nn]);set({sel:nn.id,view:'notes',autoStt:nn.id});}
+    catch(e){toast('⚠ 올리기 실패 — '+e.message);}
+  };
+  /* 통역 화면의 「정본 만들기」·음성 파일 전사 → 이 기록이 열리면 바로 받아쓰기 시작 */
+  React.useEffect(()=>{if(st.autoStt&&cur&&cur.id===st.autoStt&&!st.aiBusy){set({autoStt:null});ai('stt');}},[st.autoStt,cur&&cur.id]);
+  if(st.view==='live')return <LiveView db={db} setDb={setDb} toast={toast} onOpenNote={(id,stt)=>set({view:'notes',sel:id,tag:'',autoStt:stt?id:null})}/>;
   if(st.view==='lint')return <LintView db={db} setDb={setDb} toast={toast} onOpenNote={id=>set({sel:id,view:'notes'})}/>;
   if(st.view==='search')return <SearchView notes={notes} onPick={id=>set({sel:id,view:'notes'})} onWiki={openByTitle}/>;
   const mode=mobile?(st.mmode||'read'):(st.mode||'split');
-  const liveModal=st.live&&<LiveInterp open onClose={()=>set({live:false})} toast={toast}
-    onSave={(title,md)=>{const nn=newNote(title,scopes.work?'work':'personal',md,['통역']);setDb('notes',arr=>[...arr,nn]);
-      set({live:false,sel:nn.id,view:'notes'});toast('노트로 저장했습니다 — 🤖 정돈을 누르면 교정·요약까지 합니다');}}/>;
-  return <>{liveModal}<Card title={'노트'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
-    toolbar={<><Button icon="+" onClick={create}>새 노트</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button><Button variant="secondary" size="sm" icon="🗣" onClick={()=>set({live:true})} title="말하는 중국어를 실시간으로 받아쓰고 한국어로 통역합니다 (Qwen LiveTranslate)">통역</Button>
+  return <><Card title={'번역·전사'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
+    toolbar={<><Button icon="🎙" onClick={()=>document.getElementById('kbAudioIn').click()} disabled={st.aiBusy} title="녹음 파일을 올리면 받아쓰기 → 정리·번역까지 이어서 합니다">음성 파일 전사</Button><input id="kbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(f)uploadAudio(f);}}/><Button variant="gray" icon="+" onClick={create}>새 기록</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button>
       {!mobile&&<span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span>}</>}
     toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="제목·한 줄 정의·핵심·관련 링크·출처로 정돈하고 태그를 붙입니다. 받아쓴 녹취가 있으면 정리·번역까지 이어서 합니다. 원문은 하단에 접어서 보존">정돈</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy} onClick={()=>{
       if(!audioRefs(cur&&cur.md).length){toast('이 노트에 음성이 없습니다 — 편집기 아래 🎙 녹음이나 📎 첨부로 음성 파일을 먼저 붙이세요');return;}
@@ -40274,7 +40391,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v7.7.1';
+const APP_VERSION='v7.8';
 /* ── 새 버전 확인 ─────────────────────────────────────
    홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
    그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
@@ -40380,7 +40497,7 @@ function useNotifications(db,goto){
 const KINDS_COUNT=d=>({mails:(d.mails||[]).length,notes:(d.notes||[]).length,events:(d.events||[]).length});
 const UNDO_MAX=30;
 const KIND_LABEL={mails:'메일',notes:'노트',events:'일정',accounts:'계정',files:'파일'};
-const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'📘 지식'}];
+const ZONES=[{id:'mail',label:'✉ 메일'},{id:'cal',label:'📅 일정'},{id:'kb',label:'🗣 통번역'}];
 function PmsApp(){
   const [user,setUser]=React.useState(undefined);
   React.useEffect(()=>{Store.init().then(u=>setUser(u||null));},[]);
@@ -40402,7 +40519,7 @@ function MobileNav({sections}){
 }
 /* 폰 하단 고정 툴바 — 뒤로 · 앞으로 · 영역 전환 */
 function MobileBar({canBack,canFwd,onBack,onFwd,zone,onZone,badges}){
-  const ico={mail:'✉',cal:'📅',kb:'📘'},lab={mail:'메일',cal:'일정',kb:'지식'};
+  const ico={mail:'✉',cal:'📅',kb:'🗣'},lab={mail:'메일',cal:'일정',kb:'통번역'};
   const Btn=({on,dis,children,onClick,label})=>
     <button type="button" disabled={dis} onClick={onClick} aria-label={label}
       style={{flex:1,minWidth:0,display:'flex',flexDirection:'column',alignItems:'center',gap:1,
@@ -40431,7 +40548,7 @@ function Shell({user,onLogout}){
   const NS=window.HDWorkbookDesignSystem_ad60e4;const {AppHeader,SessionBar,SessionDivider,ZoneSegment,NavSidebar,Button,Badge,Toast,InfoBar}=NS;
   const [db,setDbRaw]=React.useState(null);const [zone,setZone]=React.useState(localStorage.getItem('pms.zone')||'mail');
   const [trashOpen,setTrash]=React.useState(false);const [saved,setSaved]=React.useState('');const [toastMsg,setToastMsg]=React.useState('');const [cfgOpen,setCfg]=React.useState(false);const [err,setErr]=React.useState('');
-  const [mailSt,setMailSt]=React.useState({acc:'all',folder:'inbox',sel:null,picked:[]});const [calSt,setCalSt]=React.useState({view:'month',sub:'month',cals:{work:true,personal:true},anchor:todayISO()});const [kbSt,setKbSt]=React.useState({view:'notes',tag:'',scopes:{work:true,personal:true},picked:[],sel:null,mode:'split'});
+  const [mailSt,setMailSt]=React.useState({acc:'all',folder:'inbox',sel:null,picked:[]});const [calSt,setCalSt]=React.useState({view:'month',sub:'month',cals:{work:true,personal:true},anchor:todayISO()});const [kbSt,setKbSt]=React.useState({view:'live',tag:'',scopes:{work:true,personal:true},picked:[],sel:null,mode:'split'});
   const timers=React.useRef({});const mobile=useMobile();const updated=useAppUpdate();
   const [dbForNoti,setDbForNoti]=React.useState(null);
   useNotifications(dbForNoti);
@@ -40605,9 +40722,9 @@ function Shell({user,onLogout}){
   const restoreItem=(kind,item)=>{if(!item)return;setDb(kind,arr=>arr.some(x=>x.id===item.id)?arr:[...arr,item]);};
   /* 메일·일정 → 노트. 화면은 그대로 두고 노트만 만든다(지식 화면으로 튀지 않게) */
   const makeNote=src=>{const n=newNote(src.subject,'work',`# ${src.subject}\n\n${src.from?'보낸 사람: '+src.from+'  \n':''}${src.date?'날짜: '+fmtDT(src.date)+'  \n':''}\n${src.body||''}\n\n---\n출처: ${src.from?'메일':'일정'}`);setDb('notes',arr=>[...arr,n]);return n;};
-  const sendToNote=src=>{const n=makeNote(src);setKbSt(s=>({...s,sel:n.id,view:'notes'}));toast('노트로 저장 · 📘 지식에서 확인');return n;};
+  const sendToNote=src=>{const n=makeNote(src);setKbSt(s=>({...s,sel:n.id,view:'notes'}));toast('노트로 저장 · 🗣 통번역 › 번역·전사에서 확인');return n;};
   const sendManyToNote=srcs=>{const ns=srcs.map(s=>newNote(s.subject,'work',`# ${s.subject}\n\n${s.from?'보낸 사람: '+s.from+'  \n':''}${s.date?'날짜: '+fmtDT(s.date)+'  \n':''}\n${s.body||''}\n\n---\n출처: ${s.from?'메일':'일정'}`));
-    setDb('notes',arr=>[...arr,...ns]);setKbSt(s=>({...s,sel:ns[0]?ns[0].id:s.sel,view:'notes'}));toast(ns.length+'건을 노트로 저장 · 📘 지식에서 확인');return ns;};
+    setDb('notes',arr=>[...arr,...ns]);setKbSt(s=>({...s,sel:ns[0]?ns[0].id:s.sel,view:'notes'}));toast(ns.length+'건을 노트로 저장 · 🗣 통번역 › 번역·전사에서 확인');return ns;};
   const sendToEvent=m=>{setCalSt(s=>({...s,edit:{...emptyEvent(todayISO()),title:m.subject,notes:'메일: '+m.from+'\n\n'+m.body.slice(0,300)}}));setZone('cal');};
   if(err)return <div style={{padding:40}}><InfoBar tone="warn">{err}</InfoBar><Button variant="gray" onClick={()=>setCfg(true)}>⚙ 연결 설정</Button><SettingsModal open={cfgOpen} onClose={()=>setCfg(false)} onToast={toast}/></div>;
   if(!db)return <div style={{padding:40,color:'var(--text-label)'}}>데이터 불러오는 중…</div>;
