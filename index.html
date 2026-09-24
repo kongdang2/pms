@@ -38639,7 +38639,6 @@ function CalToggle({cals,onChange}){
 function CalendarView({db,setDb,st,set,toast,sendToNote}){
   const mobile=useMobile();
   /* 폰에서는 월간 격자가 너무 좁다 — 처음 열 때 목록으로 */
-  React.useEffect(()=>{if(mobile&&!st.mSeen)set({view:'list',mSeen:true});},[mobile]);
   const {Card,Button,Badge,Modal,InfoBar}=window.HDWorkbookDesignSystem_ad60e4;
   const today=todayISO();const anchor=st.anchor||today;const view=st.view||'month';const sub=st.sub||'month';
   const cals=st.cals||{work:true,personal:true};
@@ -39708,6 +39707,17 @@ function putSection(md,head,body){
   const next=cleaned+'\n\n## '+head+'\n'+String(body).trim()+'\n';
   return raw?next+'\n'+raw:next;
 }
+/* 맨 위(제목·머리 줄 바로 아래, 첫 ## 절 앞)에 절을 넣는다 — 전사·정리 결과를 먼저 보이게 */
+function putSectionTop(md,head,body){
+  const [main,raw]=splitRaw(md);
+  const esc=head.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const re=new RegExp('\\n*##\\s*'+esc+'[^\\n]*\\n[\\s\\S]*?(?=\\n##\\s|$)','g');
+  const cleaned=main.replace(re,'').replace(/\s+$/,'');
+  const sec='## '+head+'\n'+String(body).trim()+'\n';
+  const m=/(^|\n)##\s/.exec(cleaned);
+  const next=m?cleaned.slice(0,m.index).replace(/\s+$/,'')+'\n\n'+sec+'\n'+cleaned.slice(m.index).replace(/^\n+/,''):cleaned+'\n\n'+sec;
+  return raw?next+'\n'+raw:next;
+}
 const splitRaw=md=>{const i=md.indexOf('\n'+RAW_HEAD);return i<0?[md,'',0]:[md.slice(0,i),md.slice(i+1),md.slice(0,i+1).split('\n').length-1];};
 const MD_HELP=[['# 제목','첫 줄의 # 이 노트 제목이 됨'],['## 소제목','H2 · ### 은 H3'],['- 항목','불릿 목록 · 1. 은 번호 목록'],['- [ ] 할 일','체크박스 · 읽기 모드에서 클릭 토글'],['**굵게** *기울임*','강조'],['`코드`','인라인 코드 · ``` 로 블록'],['> 인용','인용문'],['| 표 | 표 |','2번째 줄에 |---|---| 필요'],['[[노트 제목]]','위키링크 · 없는 노트는 클릭 시 생성'],['[[제목|표시 이름]]','다른 이름으로 표시'],['[텍스트](https://…)','외부 링크']];
 /* 본문에 [[제목]] 추가 — "## 관련" 절이 있으면 그 아래에 */
@@ -39772,7 +39782,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
       toast('글 '+raw.length.toLocaleString()+'자를 '+n+'조각으로 나눠 정리합니다 · 몇 분 걸립니다');
       const out=await polishTranscript(raw,{hint:Store.cfg.sttHint,onStep:t=>toast(t)});
       /* 빈 껍데기 절과 지난번 결과는 걷어내고 새로 붙인다 */
-      return putSection(mdIn,'정리·번역 (Claude)',out);
+      return putSectionTop(mdIn,'정리·번역 (Claude)',out);
     };
     if(kind==='polish'){
       try{
@@ -39793,7 +39803,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
           all+=(all?'\n\n':'')+'### '+nm.replace(/^🎙\s*/,'')+'\n'+txt;
         }
         const eng=Store.cfg.sttEngine==='paraformer'?'Qwen3-ASR':'Whisper';
-        const withRaw=putSection(cur.md,'녹취 ('+eng+')',all);
+        const withRaw=putSectionTop(cur.md,'녹취 ('+eng+')',all);
         upd(cur.id,{md:withRaw});
         /* 전사가 끝나면 정리·번역까지 이어서 — 받아쓴 그대로는 읽기 어렵다 */
         toast('전사 완료 — 이어서 정리·번역합니다');
@@ -39896,22 +39906,17 @@ function KnowledgeView({db,setDb,st,set,toast}){
   if(st.view==='search')return <SearchView notes={notes} onPick={id=>set({sel:id,view:'notes'})} onWiki={openByTitle}/>;
   const mode=mobile?(st.mmode||'read'):(st.mode||'split');
   return <><Card title={'번역·전사'+(tag?' ▸ #'+tag:'')} badge={<Badge tone="muted">{list.length}개</Badge>}
-    toolbar={<><Button icon="🎙" onClick={()=>document.getElementById('kbAudioIn').click()} disabled={st.aiBusy} title="녹음 파일을 올리면 받아쓰기 → 정리·번역까지 이어서 합니다">음성 파일 전사</Button><input id="kbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(f)uploadAudio(f);}}/><Button variant="gray" icon="+" onClick={create}>새 기록</Button><Button variant="gray" size="sm" icon="📥" onClick={()=>set({vault:true})}>가져오기</Button>
+    toolbar={<><Button icon="🎙" onClick={()=>document.getElementById('kbAudioIn').click()} disabled={st.aiBusy} title="녹음 파일을 올리면 받아쓰기 → 정리·번역까지 이어서 합니다">음성 파일 전사</Button><input id="kbAudioIn" type="file" accept="audio/*,video/mp4,.m4a,.mp3,.wav,.webm,.aac,.amr,.3gp" style={{display:'none'}} onChange={e=>{const f=e.target.files&&e.target.files[0];e.target.value='';if(f)uploadAudio(f);}}/>
       {!mobile&&<span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2,marginLeft:4}}>{[['edit','편집'],['split','분할'],['read','읽기']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mode:k})} style={{border:'none',borderRadius:4,padding:'3px 10px',fontSize:'var(--fs-sm2)',fontWeight:mode===k?600:500,background:mode===k?'var(--surface-active)':'transparent',color:mode===k?'var(--text-body)':'var(--text-muted)',cursor:'pointer',fontFamily:'inherit'}}>{l}</button>)}</span>}</>}
-    toolbarRight={<><ScopeToggle scopes={scopes} onChange={sc=>set({scopes:sc})}/>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🤖" disabled={!cur||st.aiBusy} onClick={()=>ai('wiki')} title="제목·한 줄 정의·핵심·관련 링크·출처로 정돈하고 태그를 붙입니다. 받아쓴 녹취가 있으면 정리·번역까지 이어서 합니다. 원문은 하단에 접어서 보존">정돈</Button><Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy} onClick={()=>{
-      if(!audioRefs(cur&&cur.md).length){toast('이 노트에 음성이 없습니다 — 편집기 아래 🎙 녹음이나 📎 첨부로 음성 파일을 먼저 붙이세요');return;}
+    toolbarRight={<>{tag&&<Button variant="ghost" size="xs" onClick={()=>set({tag:''})}>#{tag} ✕</Button>}<Button variant="secondary" size="sm" icon="🎧" disabled={!cur||st.aiBusy} onClick={()=>{
+      if(!audioRefs(cur&&cur.md).length){toast('이 기록에 음성이 없습니다 — 편집기 아래 🎙 녹음이나 📎 첨부로 음성 파일을 먼저 붙이세요');return;}
       ai('stt');}}
-      title={cur&&audioRefs(cur.md).length?('붙은 녹음 '+audioRefs(cur.md).length+'개를 글로 옮기고, 이어서 정리·번역까지 합니다'):'이 노트에 음성이 없습니다 — 먼저 🎙 녹음이나 음성 파일을 붙이세요'}>전사{cur&&audioRefs(cur.md).length?' '+audioRefs(cur.md).length:''}</Button><Button variant="secondary" size="sm" icon="🖼" disabled={!cur||st.aiBusy} onClick={()=>{
-      if(!pmsRefs(cur&&cur.md).some(r=>r.img)){toast('이 노트에 이미지가 없습니다 — 편집기에 그림을 먼저 붙이세요');return;}
-      ai('vision');}}
-      title={cur&&pmsRefs(cur.md).some(r=>r.img)?'노트에 붙인 이미지를 Claude가 읽어 표·내용을 글로 옮깁니다':'이 노트에 이미지가 없습니다 — 먼저 그림을 붙이세요'}>이미지 읽기</Button><Button variant="ghost" size="sm" onClick={openRules} title="위키 규칙 노트 — 정돈·수집·점검의 기준">📐 규칙</Button><Button variant="classic" size="sm" icon="📥" disabled={!cur} onClick={exportMd}>.md</Button><Button variant="classic" size="sm" icon="📦" onClick={()=>set({vault:true})} title="옵시디언에서 열 수 있는 .md 묶음으로 내보내기 / 되돌리기">vault</Button></>}>
+      title={cur&&audioRefs(cur.md).length?('붙은 녹음 '+audioRefs(cur.md).length+'개를 글로 옮기고, 이어서 정리·번역까지 합니다. 결과는 맨 위에 붙습니다'):'이 기록에 음성이 없습니다 — 먼저 🎙 녹음이나 음성 파일을 붙이세요'}>전사{cur&&audioRefs(cur.md).length?' '+audioRefs(cur.md).length:''}</Button></>}>
     {picked.length>0&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',marginBottom:8,background:'var(--surface-calc-cell)',border:'1px solid var(--border-strong)',borderRadius:4,fontSize:'var(--fs-base)'}}>
       <b style={{fontFamily:'var(--font-num)'}}>{picked.length}</b>개 선택
       <Button variant="gray" size="xs" onClick={()=>bulkScope('work')}>→ 업무</Button>
       <Button variant="gray" size="xs" onClick={()=>bulkScope('personal')}>→ 개인</Button>
       <Button variant="gray" size="xs" onClick={bulkTag}># 태그 추가</Button>
-      <span style={{color:'var(--text-label)'}}>|</span>
-      <Button variant="secondary" size="xs" disabled={st.aiBusy} onClick={()=>bulkAi('wiki')} title="고른 노트를 차례로 정돈합니다(녹취가 있으면 정리·번역까지)">🤖 정돈</Button>
       <span style={{color:'var(--text-label)'}}>|</span>
       <Button variant="danger" size="xs" onClick={bulkDelete}>🗑 삭제</Button>
       <Button variant="ghost" size="xs" style={{marginLeft:'auto'}} onClick={()=>set({picked:[]})}>선택 해제</Button></div>}
@@ -39922,7 +39927,7 @@ function KnowledgeView({db,setDb,st,set,toast}){
         {list.map(n=><NoteRow key={n.id} n={n} on={n.id===st.sel} picked={picked.includes(n.id)} onPick={()=>toggle(n.id)} onClick={()=>set({sel:n.id})}/>)}
         {!list.length&&<div style={{padding:20,color:'var(--text-label)',textAlign:'center'}}>노트 없음</div>}</div>
       {!mobile&&<Splitter onDrag={dx=>setLw(w=>Math.max(170,Math.min(600,w+dx)))} onReset={resetLw}/>}
-      {!cur?(mobile?null:<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>노트를 선택하거나 새로 만드세요</div>):<div style={{minWidth:0}}>
+      {!cur?(mobile?null:<div style={{color:'var(--text-label)',textAlign:'center',paddingTop:80}}>기록을 고르거나 🎙 음성 파일 전사로 시작하세요</div>):<div style={{minWidth:0}}>
         {mobile&&<div style={{padding:'6px 10px 0'}}><BackBar label={cur.title} onBack={()=>set({sel:null})}
           right={<span style={{display:'inline-flex',border:'1px solid var(--border-strong)',borderRadius:6,padding:2,gap:2}}>
             {[['read','읽기'],['edit','편집']].map(([k,l])=><button key={k} type="button" onClick={()=>set({mmode:k})}
@@ -40391,7 +40396,7 @@ function GraphView({notes,sel,onPick,onOpen,onLink,onUnlink,onWiki}){
 Object.assign(window,{KnowledgeView,kbNav,newNote,NOTE_TEMPLATE,splitRaw,putSection,addWikiLink,removeWikiLink,SCOPE_LABEL,SCOPE_COLOR,SCOPES});
 </script>
 <script type="text/babel">/* 앱 셸: 인증 게이트 → 헤더 · 세션바(영역 세그먼트) · 내비 · 본문 · 토스트. 저장은 컬렉션 단위 디바운스 */
-const APP_VERSION='v7.8';
+const APP_VERSION='v7.8.1';
 /* ── 새 버전 확인 ─────────────────────────────────────
    홈 화면 앱에는 새로고침 단추가 없고, GitHub Pages 는 HTML 을 한동안 캐시하라고 알려 준다.
    그래서 앱이 스스로 "이 파일이 바뀌었는지"를 가끔 물어본다.
